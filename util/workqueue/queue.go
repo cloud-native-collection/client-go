@@ -23,14 +23,15 @@ import (
 	"k8s.io/utils/clock"
 )
 
+// 普通队列
 type Interface interface {
 	Add(item interface{})
 	Len() int
-	Get() (item interface{}, shutdown bool)
-	Done(item interface{})
-	ShutDown()
-	ShutDownWithDrain()
-	ShuttingDown() bool
+	Get() (item interface{}, shutdown bool) // 获取一个值，返回值标识channel是否删除
+	Done(item interface{}) // 标记一个元素已经处理
+	ShutDown() // 关闭队列
+	ShutDownWithDrain() // 等待队列中的元素处理完成关闭队列
+	ShuttingDown() bool // 标记当前的channel是否正在关闭
 }
 
 // New constructs a new work queue (see the package comment).
@@ -73,20 +74,24 @@ type Type struct {
 	// queue defines the order in which we will work on items. Every
 	// element of queue should be in the dirty set and not in the
 	// processing set.
+	// 定义元素的处理顺序,quque中的所有元素均应在集合dirty中存在，但不应出现在processing集合中
 	queue []t
 
 	// dirty defines all of the items that need to be processed.
+	// 标记需要处理的元素
 	dirty set
 
 	// Things that are currently being processed are in the processing set.
 	// These things may be simultaneously in the dirty set. When we finish
 	// processing something and remove it from this set, we'll check if
 	// it's in the dirty set, and if so, add it to the queue.
+	// 当前正在处理的元素（queue出队的元素），当处理完后，需要检查该元素是否在dirty集合中，如果在需要添加到queue中
 	processing set
 
 	cond *sync.Cond
 
-	shuttingDown bool
+	// queue正在关闭
+	shuttingDown bool 
 	drain        bool
 
 	metrics queueMetrics
@@ -95,6 +100,7 @@ type Type struct {
 	clock                      clock.WithTicker
 }
 
+// 集合的定义
 type empty struct{}
 type t interface{}
 type set map[t]empty
@@ -117,24 +123,31 @@ func (s set) len() int {
 }
 
 // Add marks item as needing processing.
+// 标记一个需要处理的新的元素
 func (q *Type) Add(item interface{}) {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
+	// 正在关闭
 	if q.shuttingDown {
 		return
 	}
+	// dirty 中已经有该元素了
 	if q.dirty.has(item) {
 		return
 	}
 
 	q.metrics.add(item)
 
+	// 添加到dirty中
 	q.dirty.insert(item)
+	// 元素正在处理中,则返回
 	if q.processing.has(item) {
 		return
 	}
 
+	// 正在处理中没有，则添加到q.queue中
 	q.queue = append(q.queue, item)
+	// 通知getter有新的元素到来
 	q.cond.Signal()
 }
 
@@ -150,25 +163,32 @@ func (q *Type) Len() int {
 // Get blocks until it can return an item to be processed. If shutdown = true,
 // the caller should end their goroutine. You must call Done with item when you
 // have finished processing it.
+// Get方法可能会阻塞，直到获取到元素
 func (q *Type) Get() (item interface{}, shutdown bool) {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
+	// 长度为零切没有正在关闭，等待下一个元素
 	for len(q.queue) == 0 && !q.shuttingDown {
 		q.cond.Wait()
 	}
+	// 阻解除长度为零，说明shuttingDown为true,直接返回
 	if len(q.queue) == 0 {
 		// We must be shutting down.
 		return nil, true
 	}
 
+	// 获取第一个元素
 	item = q.queue[0]
 	// The underlying array still exists and reference this object, so the object will not be garbage collected.
+	// 赋值为nil让slice的底层数组不在引用元素对象，从而能够被垃圾回收
 	q.queue[0] = nil
+	// 更新queue
 	q.queue = q.queue[1:]
 
 	q.metrics.get(item)
-
+	// 将获取的第一个元素放到processing集合中
 	q.processing.insert(item)
+	// 在dirty集合中删除该元素
 	q.dirty.delete(item)
 
 	return item, false
@@ -177,13 +197,15 @@ func (q *Type) Get() (item interface{}, shutdown bool) {
 // Done marks item as done processing, and if it has been marked as dirty again
 // while it was being processed, it will be re-added to the queue for
 // re-processing.
+// 标记一个元素已经处理完成
 func (q *Type) Done(item interface{}) {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
 	q.metrics.done(item)
-
+	// processing中删除元素
 	q.processing.delete(item)
+	// dirty中还有，说明还要处理，通知getter有新的元素
 	if q.dirty.has(item) {
 		q.queue = append(q.queue, item)
 		q.cond.Signal()

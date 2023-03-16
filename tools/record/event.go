@@ -53,7 +53,7 @@ type EventSink interface {
 // CorrelatorOptions allows you to change the default of the EventSourceObjectSpamFilter
 // and EventAggregator in EventCorrelator
 type CorrelatorOptions struct {
-	// The lru cache size used for both EventSourceObjectSpamFilter and the EventAggregator
+	// The lru c6yache size used for both EventSourceObjectSpamFilter and the EventAggregator
 	// If not specified (zero value), the default specified in events_cache.go will be picked
 	// This means that the LRUCacheSize has to be greater than 0.
 	LRUCacheSize int
