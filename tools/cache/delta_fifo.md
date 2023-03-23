@@ -90,7 +90,7 @@ type DeltaFIFOOptions struct {
 // A note on threading: If you call Pop() in parallel from multiple
 // threads, you could end up with multiple threads processing slightly
 // different versions of the same object.
-// DeltaFIFO一个按序的(先入先出)kubernetes对象变化的队列
+// DeltaFIFO一个按序的(先入先出)kubernetes对象变化的队列,实现了Store接口
 
 type DeltaFIFO struct {
 	// lock/cond protects access to 'items' and 'queue'.
@@ -107,7 +107,7 @@ type DeltaFIFO struct {
 	// `queue` maintains FIFO order of keys for consumption in Pop().
 	// There are no duplicates in `queue`.
 	// A key is in `queue` if and only if it is in `items`.
-	// map存储无序，实现先入先出，存储是对象的键
+	// 存储是对象的键，items map存储无序，与上述items的key保持一致，实现先入先出，
 	queue []string
 
 	/*******
@@ -126,12 +126,12 @@ type DeltaFIFO struct {
 
 	// keyFunc is used to make the key used for queued item
 	// insertion and retrieval, and should be deterministic.
-	// 对象键计算函数
+	// 对象键计算函数,构建上述items map用到的key
 	keyFunc KeyFunc
 
 	// knownObjects list keys that are "known" --- affecting Delete(),
 	// Replace(), and Resync()
-	// KeyListerGetter接口中的方法ListKeys和GetByKey也是Store接口中的方法
+	// 用于检索所有的key,KeyListerGetter接口中的方法ListKeys和GetByKey也是Store接口中的方法
 	// knownObjects能够被赋值为实现了Store的类型指针
 	knownObjects KeyListerGetter
 
@@ -146,6 +146,7 @@ type DeltaFIFO struct {
 }
 
 // DeltaType is the type of a change (addition, deletion, etc)
+// 定义
 type DeltaType string
 
 // Change type definition
@@ -171,8 +172,7 @@ const (
 //
 // [*] Unless the change is a deletion, and then you'll get the final
 // state of the object before it was deleted.
-// 操作类型
-// 保存操作执行后对象
+// 操作类型 保存操作执行后对象
 type Delta struct {
 	// Delta类型，比如增、减
 	Type   DeltaType
@@ -461,7 +461,7 @@ func isDeletionDup(a, b *Delta) *Delta {
 // Caller must lock first.
 // 队列操作，把“动作”放入deltas中，加锁
 func (f *DeltaFIFO) queueActionLocked(actionType DeltaType, obj interface{}) error {
-	// 计算对象键
+	// 计算对象key
 	id, err := f.KeyOf(obj)
 	if err != nil {
 		return KeyError{obj, err}
@@ -470,15 +470,17 @@ func (f *DeltaFIFO) queueActionLocked(actionType DeltaType, obj interface{}) err
 	oldDeltas := f.items[id]
 	// 同一个对象的多次操作，所以要追加到Deltas数组中
 	newDeltas := append(oldDeltas, Delta{actionType, obj})
-	// 合并操作，去掉冗余的delta
+	// 合并操作，去掉冗余的delta,如果最近的一个delta是重复的，则保留最后一个，目前版本只处理Deltaed重复的场景
 	newDeltas = dedupDeltas(newDeltas)
 
+	// 理论上newDeltas的长度一定是大于0
 	if len(newDeltas) > 0 {
 		// 判断对象是否已经存在
 		if _, exists := f.items[id]; !exists {
 			// 如果对象没有存在过，那就放入队列中，如果存在说明已经在queue中了，也就没必要再添加了
 			f.queue = append(f.queue, id)
 		}
+		// id已经存在则只更新items map中对应这个key的Delta
 		f.items[id] = newDeltas
 		// 更新Deltas数组，通知所有调用Pop()的人
 		f.cond.Broadcast()
@@ -579,7 +581,8 @@ func (f *DeltaFIFO) IsClosed() bool {
 //
 // Pop returns a 'Deltas', which has a complete list of all the things
 // that happened to the object (deltas) while it was sitting in the queue.
-// 消费reflector的数据
+// 消费reflector的数据,按照元素的添加或更新顺序有序的返回一个元素，队列为空时阻塞
+// 消费时先从队列中删除一个元素返回，若处理失败，则需要AddIfNotPresent()
 func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -628,7 +631,7 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 		}
 		// 处理对象的回调函数，由controller传入
 		err := process(item)
-		// 重入队列
+		// c处理失败，重入队列
 		if e, ok := err.(ErrRequeue); ok {
 			f.addIfNotPresent(id, item)
 			err = e.Err
@@ -656,17 +659,18 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
+	// 保存列表中每个元素的key
 	keys := make(sets.String, len(list))
 
 	// keep backwards compat for old clients
-	// 同步
+	// 同步,老代码兼容逻辑
 	action := Sync
 	if f.emitDeltaTypeReplaced {
 		action = Replaced
 	}
 
 	// Add Sync/Replaced action for each new item.
-	// 遍历所有的输入目标
+	// 遍历所有的输入目标，每个元素后添加一个Sync/Replace动作
 	for _, item := range list {
 		// 计算目标键
 		key, err := f.KeyOf(item)
@@ -685,6 +689,7 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 	// 查找不在全量集合中的老对象即删除的对象
 	if f.knownObjects == nil {
 		// Do deletion detection against our own list.
+		// 删除f.items中的旧元素
 		queuedDeletions := 0
 		for k, oldItem := range f.items {
 			// 目标在输入的对象中存在就忽略
@@ -695,14 +700,14 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 			// This could happen if watch deletion event was missed while
 			// disconnected from apiserver.
 			var deletedObj interface{}
-			// 输入对象中没有，说明对象已经被删除
+			// 输入对象中没有，说明对象已经被删除，
 			if n := oldItem.Newest(); n != nil {
 				deletedObj = n.Object
 			}
 			// 累计删除对象
 			queuedDeletions++
 			//队列中存储对象的Deltas数组中,可能已经存在Delete了，
-			//避免重复，采用DeletedFinalStateUnknown这种类型
+			//避免重复，采用DeletedFinalStateUnknown这种类型，标记删除
 			if err := f.queueActionLocked(Deleted, DeletedFinalStateUnknown{k, deletedObj}); err != nil {
 				return err
 			}
@@ -722,7 +727,7 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 
 	// Detect deletions not already in the queue.
 	//处理检测某些目标删除但是Delta没有在队列中
-	// 从存储中获取所有对象键
+	// 从存储中获取所有对象键,形如：“default/pod_1”
 	knownKeys := f.knownObjects.ListKeys()
 	queuedDeletions := 0
 	for _, k := range knownKeys {
@@ -731,7 +736,7 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 			continue
 		}
 
-		//获取对象
+		//获取对象,新列表中不存在的旧元素标记为将要删除
 		deletedObj, exists, err := f.knownObjects.GetByKey(k)
 		if err != nil {
 			deletedObj = nil
@@ -742,7 +747,7 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 		}
 		//累计删除对象
 		queuedDeletions++
-		// 把对象删除的Delta放入队列
+		// 把对象删除的Delta放入队列，添加删除动作，因为与apiserver失联等场景会引起删除时间没有监听到，所以DeletedFinalStateUnknown类型
 		if err := f.queueActionLocked(Deleted, DeletedFinalStateUnknown{k, deletedObj}); err != nil {
 			return err
 		}

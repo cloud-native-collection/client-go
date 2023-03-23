@@ -38,7 +38,7 @@ func (e ErrRequeue) Error() string {
 // A Queue can be "closed", after which Pop operations return an error.
 // fifo的抽象，DeltaFIFO是FIFO的一种实现
 type Queue interface {
-	// 存储接口
+	// 嵌套存储接口
 	Store
 
 	// Pop blocks until there is at least one key to process or the
@@ -51,13 +51,13 @@ type Queue interface {
 	// return that (key, accumulator) association to the Queue as part
 	// of the atomic processing and (b) return the inner error from
 	// Pop.
-	// 增加Pop接口，用于弹出对象
+	// 增加Pop接口，用于弹出对象,会阻塞直到下一个元素弹出或者队列关闭
 	Pop(PopProcessFunc) (interface{}, error)
 
 	// AddIfNotPresent puts the given accumulator into the Queue (in
 	// association with the accumulator's key) if and only if that key
 	// is not already associated with a non-empty accumulator.
-	// 对象(必须是Deltas数组，就是通过Pop（）弹出的对象)如果不存在就添加
+	// 对象(必须是Deltas数组，就是通过Pop()弹出的对象)如果不存在就添加
 	AddIfNotPresent(interface{}) error
 
 	// HasSynced returns true if the first batch of keys have all been
