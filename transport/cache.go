@@ -32,6 +32,9 @@ import (
 // TlsTransportCache caches TLS http.RoundTrippers different configurations. The
 // same RoundTripper will be returned for configs with identical TLS options If
 // the config has no custom TLS options, http.DefaultTransport is returned.
+// TlsTransportCache缓存不同配置的TLS http.RoundTripper。
+// 对于具有相同TLS选项的配置，将返回相同的RoundTripper。
+// 如果配置没有自定义的TLS选项，则返回http.DefaultTransport。
 type tlsTransportCache struct {
 	mu         sync.Mutex
 	transports map[tlsCacheKey]*http.Transport
@@ -40,6 +43,8 @@ type tlsTransportCache struct {
 // DialerStopCh is stop channel that is passed down to dynamic cert dialer.
 // It's exposed as variable for testing purposes to avoid testing for goroutine
 // leakages.
+// DialerStopCh是一个停止通道，传递给动态证书连接。
+// 它作为变量公开是为了测试目的，以避免测试goroutine泄漏。var DialerStopCh = wait.NeverStop
 var DialerStopCh = wait.NeverStop
 
 const idleConnsPerHost = 25
@@ -139,6 +144,7 @@ func (c *tlsTransportCache) get(config *Config) (http.RoundTripper, error) {
 }
 
 // tlsConfigKey returns a unique key for tls.Config objects returned from TLSConfigFor
+// 依据TLSConfigFor 给tls.Config 对象返回一个唯一的key
 func tlsConfigKey(c *Config) (tlsCacheKey, bool, error) {
 	// Make sure ca/key/cert content is loaded
 	if err := loadTLSFiles(c); err != nil {

@@ -48,6 +48,7 @@ import (
 const defaultExpectedTypeName = "<unspecified>"
 
 // Reflector watches a specified resource and causes all changes to be reflected in the given store.
+// Reflector是一个用于监视Kubernetes资源并将所有增量的数据推到给定存储中的工具
 type Reflector struct {
 	// name identifies this reflector. By default it will be a file:line if possible.
 	name string
@@ -64,8 +65,10 @@ type Reflector struct {
 	// The GVK of the object we expect to place in the store if unstructured.
 	expectedGVK *schema.GroupVersionKind
 	// The destination to sync up with the watch source
+	// 存储，就是DeltaFIFO
 	store Store
 	// listerWatcher is used to perform lists and watches.
+	// 监听apiserver,实现了资源的 list 和 watch 接口.
 	listerWatcher ListerWatcher
 	// backoff manages backoff of ListWatch
 	backoffManager wait.BackoffManager
@@ -80,6 +83,7 @@ type Reflector struct {
 	// lastSyncResourceVersion is the resource version token last
 	// observed when doing a sync with the underlying store
 	// it is thread safe, but not synchronized with the underlying store
+	//  最后一次从 apiserver 拉取(同步)的资源版本
 	lastSyncResourceVersion string
 	// isLastSyncResourceVersionUnavailable is true if the previous list or watch request with
 	// lastSyncResourceVersion failed with an "expired" or "too large resource version" error.
@@ -285,6 +289,7 @@ var internalPackages = []string{"client-go/tools/cache/"}
 // Run will exit when stopCh is closed.
 func (r *Reflector) Run(stopCh <-chan struct{}) {
 	klog.V(3).Infof("Starting reflector %s (%s) from %s", r.typeDescription, r.resyncPeriod, r.name)
+	// 启动 ListAndWatch 监听, 一直循环调用直到 stopCh 通知退出.
 	wait.BackoffUntil(func() {
 		if err := r.ListAndWatch(stopCh); err != nil {
 			r.watchErrorHandler(r, err)
@@ -343,6 +348,7 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 	}
 
 	if fallbackToList {
+		// 尝试获取某资源相关条件下的所有对象
 		err = r.list(stopCh)
 		if err != nil {
 			return err
