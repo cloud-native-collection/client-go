@@ -1,4 +1,5 @@
-Queue是在Store基础上扩展了Pop接口可以让对象有序的弹出，Indexer是在Store基础上建立了索引，可以快速检索对象
+`Queu`e是在`Store`基础上扩展了`Pop`接口可以让对象有序的弹出，
+`Indexer`是在`Store`基础上建立了索引，可以快速检索对象
 
 Reflector利用apiserver的client列举全量对象(版本为0以后的对象全部列举出来)
 将全量对象采用Replace()接口同步到DeltaFIFO中，并且更新资源的版本号，这个版本号后续会用到；

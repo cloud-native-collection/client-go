@@ -51,6 +51,9 @@ import (
 )
 
 // SharedInformerOption defines the functional option type for SharedInformerFactory.
+// 回调函数 是一个函数指针，传入的是工厂指针，返回也是工厂指针
+// 选项函数直接修改工厂对象，然后把修改的对象返回
+// 把选项函数直接操作类成员，扩展比较容易
 type SharedInformerOption func(*sharedInformerFactory) *sharedInformerFactory
 
 type sharedInformerFactory struct {

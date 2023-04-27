@@ -974,10 +974,12 @@ func (r *Request) request(ctx context.Context, fn func(*http.Request, *http.Resp
 		if err := retry.Before(ctx, r); err != nil {
 			return retry.WrapPreviousError(err)
 		}
+		//调用Go标准库net/http进行request构建
 		req, err := r.newHTTPRequest(ctx)
 		if err != nil {
 			return err
 		}
+		// Do发送request请求并接受resp
 		resp, err := client.Do(req)
 		updateURLMetrics(ctx, r, resp, err)
 		// The value -1 or a value of 0 with a non-nil Body indicates that the length is unknown.
@@ -988,6 +990,7 @@ func (r *Request) request(ctx context.Context, fn func(*http.Request, *http.Resp
 		retry.After(ctx, r, resp, err)
 
 		done := func() bool {
+			//Body.close()在defer函数中，保证函数退出时，对其进行关闭，防止内存溢出
 			defer readAndCloseResponseBody(resp)
 
 			// if the server returns an error in err, the response will be nil.
@@ -1002,6 +1005,7 @@ func (r *Request) request(ctx context.Context, fn func(*http.Request, *http.Resp
 				return false
 			}
 
+			//fn函数即为之前传入的transformResponse函数，将结果转为资源对象
 			f(req, resp)
 			return true
 		}()
@@ -1051,6 +1055,7 @@ func (r *Request) DoRaw(ctx context.Context) ([]byte, error) {
 }
 
 // transformResponse converts an API response into a structured API object
+// 解析result
 func (r *Request) transformResponse(resp *http.Response, req *http.Request) Result {
 	var body []byte
 	if resp.Body != nil {

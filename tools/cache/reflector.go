@@ -60,12 +60,15 @@ type Reflector struct {
 	// Only the type needs to be right, except that when that is
 	// `unstructured.Unstructured` the object's `"apiVersion"` and
 	// `"kind"` must also be right.
+	// 要监控的对象类型
 	expectedType reflect.Type
 	// The GVK of the object we expect to place in the store if unstructured.
 	expectedGVK *schema.GroupVersionKind
 	// The destination to sync up with the watch source
+	// 存储，就是DeltaFIFO
 	store Store
 	// listerWatcher is used to perform lists and watches.
+	// 监听`apiserver`
 	listerWatcher ListerWatcher
 
 	// backoff manages backoff of ListWatch
@@ -75,10 +78,14 @@ type Reflector struct {
 	// MaxInternalErrorRetryDuration defines how long we should retry internal errors returned by watch.
 	MaxInternalErrorRetryDuration time.Duration
 
+	// 重新同步的周期，很多人肯定认为这个同步周期指的是从apiserver的同步周期
+	// 其实这里面同步指的是shared_informer使用者需要定期同步全量对象
 	resyncPeriod time.Duration
 	// ShouldResync is invoked periodically and whenever it returns `true` the Store's Resync operation is invoked
+	// 是否需要同步
 	ShouldResync func() bool
 	// clock allows tests to manipulate time
+	// 时钟
 	clock clock.Clock
 	// paginatedResult defines whether pagination should be forced for list calls.
 	// It is set based on the result of the initial list call.
@@ -86,11 +93,13 @@ type Reflector struct {
 	// lastSyncResourceVersion is the resource version token last
 	// observed when doing a sync with the underlying store
 	// it is thread safe, but not synchronized with the underlying store
+	// 最后一次同步的资源版本
 	lastSyncResourceVersion string
 	// isLastSyncResourceVersionUnavailable is true if the previous list or watch request with
 	// lastSyncResourceVersion failed with an "expired" or "too large resource version" error.
 	isLastSyncResourceVersionUnavailable bool
 	// lastSyncResourceVersionMutex guards read/write access to lastSyncResourceVersion
+	// 最后一次同步的资源版本加锁
 	lastSyncResourceVersionMutex sync.RWMutex
 	// WatchListPageSize is the requested chunk size of initial and resync watch lists.
 	// If unset, for consistent reads (RV="") or reads that opt-into arbitrarily old data
@@ -126,6 +135,7 @@ type ResourceVersionUpdater interface {
 type WatchErrorHandler func(r *Reflector, err error)
 
 // DefaultWatchErrorHandler is the default implementation of WatchErrorHandler
+// WatchErrorHandler的实现
 func DefaultWatchErrorHandler(r *Reflector, err error) {
 	switch {
 	case isExpiredError(err):
@@ -298,6 +308,7 @@ var (
 // resyncChan returns a channel which will receive something when a resync is
 // required, and a cleanup function.
 func (r *Reflector) resyncChan() (<-chan time.Time, func() bool) {
+	// 周期为0,不用定时同步，返回永久的超时定时器
 	if r.resyncPeriod == 0 {
 		return neverExitWatch, func() bool { return false }
 	}
@@ -305,6 +316,7 @@ func (r *Reflector) resyncChan() (<-chan time.Time, func() bool) {
 	// always fail so we end up listing frequently. Then, if we don't
 	// manually stop the timer, we could end up with many timers active
 	// concurrently.
+	// 构建定时器
 	t := r.clock.NewTimer(r.resyncPeriod)
 	return t.C(), t.Stop
 }
@@ -320,15 +332,23 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 		return err
 	}
 
+	// 启动一个后台协程实现定期的同步操作，这个同步就是将SharedInformer里面的对象全量以同步事件的方式通知使用者
+	// 我们暂且称之为“后台同步协程”，Run()函数退出需要后台同步协程退出，所以下面的cancelCh就是干这个用的
+	// 利用defer close(cancelCh)实现的，而resyncerrc是后台同步协程反向通知Run()函数的报错通道
+	// 当后台同步协程出错，Run()函数接收到信号就可以退出了
 	resyncerrc := make(chan error, 1)
 	cancelCh := make(chan struct{})
 	defer close(cancelCh)
+	//后台同步协程
 	go func() {
+		// resyncCh返回的就是一个定时器，如果resyncPeriod这个为0那么就会返回一个永久定时器，cleanup函数是用来清理定时器的
 		resyncCh, cleanup := r.resyncChan()
 		defer func() {
 			cleanup() // Call the last one written into cleanup
 		}()
+		// 死循环等待各种信号
 		for {
+			// 只有定时器有信号才继续处理，其他的都会退出
 			select {
 			case <-resyncCh:
 			case <-stopCh:
@@ -336,13 +356,17 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 			case <-cancelCh:
 				return
 			}
+			// ShouldResync是个函数地址，创建反射器对象的时候传入，即便时间到了，也要通过函数问问是否需要同步
 			if r.ShouldResync == nil || r.ShouldResync() {
+				// store是DeltaFIFO，DeltaFIFO.Resync()做了什么
+				// 就在这里实现了同步，同步以全量对象同步事件的方式通知使用者
 				klog.V(4).Infof("%s: forcing resync", r.name)
 				if err := r.store.Resync(); err != nil {
 					resyncerrc <- err
 					return
 				}
 			}
+			// 清理掉当前的计时器，获取下一个同步时间定时器
 			cleanup()
 			resyncCh, cleanup = r.resyncChan()
 		}
@@ -351,13 +375,17 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 	retry := NewRetryWithDeadline(r.MaxInternalErrorRetryDuration, time.Minute, apierrors.IsInternalError, r.clock)
 	for {
 		// give the stopCh a chance to stop the loop, even in case of continue statements further down on errors
+		// 如果有退出信号就立刻返回，否则就会往下走，因为有default.
 		select {
 		case <-stopCh:
 			return nil
 		default:
 		}
 
+		// 计算wath的超时时间
 		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
+		// 设置watch的选项，因为前期列举了全量对象，从这里只要监听最新版本以后的资源就可以了
+		// 如果没有资源变化总不能一直挂着吧？也不知道是卡死了还是怎么了，所以有一个超时会好一点
 		options := metav1.ListOptions{
 			ResourceVersion: r.LastSyncResourceVersion(),
 			// We want to avoid situations of hanging watchers. Stop any watchers that do not
@@ -371,6 +399,7 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 
 		// start the clock before sending the request, since some proxies won't flush headers until after the first watch event is sent
 		start := r.clock.Now()
+		// 开始监控对象
 		w, err := r.listerWatcher.Watch(options)
 		if err != nil {
 			// If this is "connection refused" error, it means that most likely apiserver is not responsive.
@@ -385,6 +414,9 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 			return err
 		}
 
+		// watch返回是流，apiserver会将变化的资源通过这个流发送出来，client-go最终通过chan实现的
+		// 所以watchHandler()是一个需要持续从chan读取数据的流程，所以需要传入resyncerrc和stopCh
+		// 用于异步通知退出或者后台同步协程错误
 		err = watchHandler(start, w, r.store, r.expectedType, r.expectedGVK, r.name, r.typeDescription, r.setLastSyncResourceVersion, r.clock, resyncerrc, stopCh)
 		retry.After(err)
 		if err != nil {
@@ -415,6 +447,9 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 // the resource version can be used for further progress notification (aka. watch).
 func (r *Reflector) list(stopCh <-chan struct{}) error {
 	var resourceVersion string
+	// 数据采用版本的方式记录，数据每变化(添加、删除、更新)都会触发版本更新，
+	// 避免全量数据访问。以apiserver资源监控为例，只要监控比缓存中资源版本大的对象就可以了，
+	// 把变化的部分更新到缓存中就可以达到与apiserver一致的效果，一般资源的初始版本为0，从0版本开始列举就是全量的对象了
 	options := metav1.ListOptions{ResourceVersion: r.relistResourceVersion()}
 
 	initTrace := trace.New("Reflector ListAndWatch", trace.Field{Key: "name", Value: r.name})
@@ -433,6 +468,7 @@ func (r *Reflector) list(stopCh <-chan struct{}) error {
 		// Attempt to gather list in chunks, if supported by listerWatcher, if not, the first
 		// list request will return the full response.
 		pager := pager.New(pager.SimplePageFunc(func(opts metav1.ListOptions) (runtime.Object, error) {
+			// 列举资源，这部分是apimachery相关的内容
 			return r.listerWatcher.List(opts)
 		}))
 		switch {
@@ -499,6 +535,8 @@ func (r *Reflector) list(stopCh <-chan struct{}) error {
 	}
 
 	r.setIsLastSyncResourceVersionUnavailable(false) // list was successful
+	// 下面的代码主要是利用apimachinery相关的函数实现，就是把列举返回的结果转换为对象数组
+	// 下面的代码大部分来自apimachinery，此处不做过多说明，读者只要知道实现什么功能就行了
 	listMetaInterface, err := meta.ListAccessor(list)
 	if err != nil {
 		return fmt.Errorf("unable to understand list result %#v: %v", list, err)
@@ -510,25 +548,33 @@ func (r *Reflector) list(stopCh <-chan struct{}) error {
 		return fmt.Errorf("unable to understand list result %#v (%v)", list, err)
 	}
 	initTrace.Step("Objects extracted")
+	// 以上部分都是对象实例化的过程，可以称之为反射，也是Reflector这个名字的主要来源，本文不是讲解反射原理的，
+	// 而是作为SharedInformer的前端，所以我们重点介绍的是对象在SharedInformer中流转过程，所以反射原理部分不做为重点讲解
+	// 这可是真正从apiserver同步过来的全量对象，所以要同步到DeltaFIFO中
 	if err := r.syncWith(items, resourceVersion); err != nil {
 		return fmt.Errorf("unable to sync list result: %v", err)
 	}
 	initTrace.Step("SyncWith done")
+	// 设置最新的同步的对象版本
 	r.setLastSyncResourceVersion(resourceVersion)
 	initTrace.Step("Resource version updated")
 	return nil
 }
 
 // syncWith replaces the store's items with the given list.
+// 实现apiserver的全量同步
 func (r *Reflector) syncWith(items []runtime.Object, resourceVersion string) error {
+	// slice类型转换
 	found := make([]interface{}, 0, len(items))
 	for _, item := range items {
 		found = append(found, item)
 	}
+	// 调用DeltaFIFO的Replace()接口，这个接口就是用于同步全量对象的
 	return r.store.Replace(found, resourceVersion)
 }
 
 // watchHandler watches w and sets setLastSyncResourceVersion
+// 从watch返回的chan中持续读取变化的资源，并转换为DeltaFIFO相应的调用
 func watchHandler(start time.Time,
 	w watch.Interface,
 	store Store,
@@ -546,12 +592,15 @@ func watchHandler(start time.Time,
 	// Stopping the watcher should be idempotent and if we return from this function there's no way
 	// we're coming back in with the same watch interface.
 	defer w.Stop()
+	// 无限循环的从chan中持续读取资源变化，增量的变化同时监控变化
 
 loop:
 	for {
 		select {
+		// 退出信号
 		case <-stopCh:
 			return errorStopRequested
+			// 后台协程同步错误
 		case err := <-errc:
 			return err
 		case event, ok := <-w.ResultChan():
@@ -624,6 +673,7 @@ loop:
 func (r *Reflector) LastSyncResourceVersion() string {
 	r.lastSyncResourceVersionMutex.RLock()
 	defer r.lastSyncResourceVersionMutex.RUnlock()
+	// 设置已经获取到资源的最新版本
 	return r.lastSyncResourceVersion
 }
 
@@ -638,6 +688,7 @@ func (r *Reflector) setLastSyncResourceVersion(v string) {
 // versions no older than has already been observed in relist results or watch events, or, if the last relist resulted
 // in an HTTP 410 (Gone) status code, returns "" so that the relist will use the latest resource version available in
 // etcd via a quorum read.
+// relistResourceVersion确定反射器应列出或重新列出的资源版本
 func (r *Reflector) relistResourceVersion() string {
 	r.lastSyncResourceVersionMutex.RLock()
 	defer r.lastSyncResourceVersionMutex.RUnlock()
@@ -658,6 +709,7 @@ func (r *Reflector) relistResourceVersion() string {
 
 // setIsLastSyncResourceVersionUnavailable sets if the last list or watch request with lastSyncResourceVersion returned
 // "expired" or "too large resource version" error.
+// 设置“上次同步资源版本不可用”
 func (r *Reflector) setIsLastSyncResourceVersionUnavailable(isUnavailable bool) {
 	r.lastSyncResourceVersionMutex.Lock()
 	defer r.lastSyncResourceVersionMutex.Unlock()

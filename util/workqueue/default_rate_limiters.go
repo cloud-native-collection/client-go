@@ -24,13 +24,17 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// RateLimiter 限速接口
 type RateLimiter interface {
 	// When gets an item and gets to decide how long that item should wait
+	// 返回元素需要等待多长时间
 	When(item interface{}) time.Duration
 	// Forget indicates that an item is finished being retried.  Doesn't matter whether it's for failing
 	// or for success, we'll stop tracking it
+	// 放弃该元素(已经被处理了)
 	Forget(item interface{})
 	// NumRequeues returns back how many failures the item has had
+	// 元素放入队列中的次数
 	NumRequeues(item interface{}) int
 }
 
@@ -45,6 +49,7 @@ func DefaultControllerRateLimiter() RateLimiter {
 }
 
 // BucketRateLimiter adapts a standard bucket to the workqueue ratelimiter API
+// 固定速率(qps)的限速器
 type BucketRateLimiter struct {
 	*rate.Limiter
 }

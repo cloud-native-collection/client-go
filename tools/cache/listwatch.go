@@ -30,12 +30,14 @@ import (
 type Lister interface {
 	// List should return a list type object; the Items field will be extracted, and the
 	// ResourceVersion field will be used to start the watch in the right place.
+	// 根据选项列举对象
 	List(options metav1.ListOptions) (runtime.Object, error)
 }
 
 // Watcher is any object that knows how to start a watch on a resource.
 type Watcher interface {
 	// Watch should begin a watch at the specified version.
+	// 根据选项监控对象变化
 	Watch(options metav1.ListOptions) (watch.Interface, error)
 }
 
@@ -46,6 +48,7 @@ type ListerWatcher interface {
 }
 
 // ListFunc knows how to list resources
+// 列举的函数
 type ListFunc func(options metav1.ListOptions) (runtime.Object, error)
 
 // WatchFunc knows how to watch resources
@@ -62,6 +65,7 @@ type ListWatch struct {
 }
 
 // Getter interface knows how to access Get method from RESTClient.
+// Getter接口知道如何从RESTClient访问Get方法。
 type Getter interface {
 	Get() *restclient.Request
 }

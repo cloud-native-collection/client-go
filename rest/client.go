@@ -38,6 +38,7 @@ const (
 )
 
 // Interface captures the set of operations for generically interacting with Kubernetes REST apis.
+// 定义与kubernetes rest api 交互的一组接口
 type Interface interface {
 	GetRateLimiter() flowcontrol.RateLimiter
 	Verb(verb string) *Request
@@ -53,6 +54,7 @@ type Interface interface {
 //
 // TODO: ContentConfig will be updated to accept a Negotiator instead of a
 // NegotiatedSerializer and NegotiatedSerializer will be removed.
+// rest 对于响应的编码和解码
 type ClientContentConfig struct {
 	// AcceptContentTypes specifies the types the client will accept and is optional.
 	// If not set, ContentType will be used to define the Accept header

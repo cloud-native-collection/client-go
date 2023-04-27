@@ -140,6 +140,8 @@ type SharedInformer interface {
 	// It returns a registration handle for the handler that can be used to
 	// remove the handler again, or to tell if the handler is synced (has
 	// seen every item in the initial list).
+	// 添加事件资源处理器，ResourceEventHandler 定义与controller.go中
+	// 注册回调函数，当资源有变化通知调用方，可以支持多个handler
 	AddEventHandler(handler ResourceEventHandler) (ResourceEventHandlerRegistration, error)
 	// AddEventHandlerWithResyncPeriod adds an event handler to the
 	// shared informer with the requested resync period; zero means
@@ -157,17 +159,21 @@ type SharedInformer interface {
 	// be competing load and scheduling noise.
 	// It returns a registration handle for the handler that can be used to remove
 	// the handler again and an error if the handler cannot be added.
+	// 添加需要周期同步的处理器
 	AddEventHandlerWithResyncPeriod(handler ResourceEventHandler, resyncPeriod time.Duration) (ResourceEventHandlerRegistration, error)
 	// RemoveEventHandler removes a formerly added event handler given by
 	// its registration handle.
 	// This function is guaranteed to be idempotent, and thread-safe.
 	RemoveEventHandler(handle ResourceEventHandlerRegistration) error
 	// GetStore returns the informer's local cache as a Store.
+	// 获取store的接口
 	GetStore() Store
 	// GetController is deprecated, it does nothing useful
+	// 获取controller
 	GetController() Controller
 	// Run starts and runs the shared informer, returning after it stops.
 	// The informer will be stopped when stopCh is closed.
+	// informer的核心逻辑
 	Run(stopCh <-chan struct{})
 	// HasSynced returns true if the shared informer's store has been
 	// informed by at least one full LIST of the authoritative state
@@ -176,10 +182,15 @@ type SharedInformer interface {
 	// Note that this doesn't tell you if an individual handler is synced!!
 	// For that, please call HasSynced on the handle returned by
 	// AddEventHandler.
+	// 告知使用者Store里面是否已经同步了apiserver的资源，这个接口很有用
+	// 当创建完SharedInformer后，通过Reflector从apiserver同步全量对象，
+	// 然后在通过DeltaFIFO一个一个的同志到cache,这个接口就是告知使用者，
+	// 全量的对象是不是已经同步到了cache,这样就可以从cache列举或者查询了
 	HasSynced() bool
 	// LastSyncResourceVersion is the resource version observed when last synced with the underlying
 	// store. The value returned is not synchronized with access to the underlying store and is not
 	// thread-safe.
+	// 最新同步资源的版本
 	LastSyncResourceVersion() string
 
 	// The WatchErrorHandler is called whenever ListAndWatch drops the
@@ -195,6 +206,7 @@ type SharedInformer interface {
 	// The handler is intended for visibility, not to e.g. pause the consumers.
 	// The handler should return quickly - any expensive processing should be
 	// offloaded.
+	// 处理ListAndWatch丢弃连接并出现错误。调用此处理程序后，informer将退出并重试。
 	SetWatchErrorHandler(handler WatchErrorHandler) error
 
 	// The TransformFunc is called for each object which is about to be stored.
@@ -217,7 +229,7 @@ type SharedInformer interface {
 	IsStopped() bool
 }
 
-// Opaque interface representing the registration of ResourceEventHandler for
+// ResourceEventHandlerRegistration Opaque interface representing the registration of ResourceEventHandler for
 // a SharedInformer. Must be supplied back to the same SharedInformer's
 // `RemoveEventHandler` to unregister the handlers.
 //
@@ -230,20 +242,28 @@ type ResourceEventHandlerRegistration interface {
 }
 
 // SharedIndexInformer provides add and get Indexers ability based on SharedInformer.
+//  扩展了SharedInformer类型，共享的是Indexer,Indexer也是一种Store的实现
 type SharedIndexInformer interface {
+	// 继承sharedinformer
 	SharedInformer
 	// AddIndexers add indexers to the informer before it starts.
+	// 扩展indexer相关的接口
 	AddIndexers(indexers Indexers) error
 	GetIndexer() Indexer
 }
 
 // NewSharedInformer creates a new instance for the ListerWatcher. See NewSharedIndexInformerWithOptions for full details.
+// lw:这个是apiserver客户端相关的，用于Reflector从apiserver获取资源，所以需要外部提供
+// objType:这个SharedInformer监控的对象类型
+// resyncPeriod:同步周期，SharedInformer需要多长时间给使用者发送一次全量对象的同步时间
 func NewSharedInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration) SharedInformer {
 	return NewSharedIndexInformer(lw, exampleObject, defaultEventHandlerResyncPeriod, Indexers{})
 }
 
 // NewSharedIndexInformer creates a new instance for the ListerWatcher and specified Indexers. See
 // NewSharedIndexInformerWithOptions for full details.
+// 创建SharedIndexInformer对象
+// indexers:需要外部提供计算对象索引键的函数，也就是这里面的对象需要通过什么方式创建索引
 func NewSharedIndexInformer(lw ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration, indexers Indexers) SharedIndexInformer {
 	return NewSharedIndexInformerWithOptions(
 		lw,
@@ -270,15 +290,23 @@ func NewSharedIndexInformerWithOptions(lw ListerWatcher, exampleObject runtime.O
 	realClock := &clock.RealClock{}
 
 	return &sharedIndexInformer{
-		indexer:                         NewIndexer(DeletionHandlingMetaNamespaceKeyFunc, options.Indexers),
-		processor:                       &sharedProcessor{clock: realClock},
-		listerWatcher:                   lw,
-		objectType:                      exampleObject,
-		objectDescription:               options.ObjectDescription,
+		// 其实就是在构造cache，可以自行查看NewIndexer()的实现，
+		// 在cache中的对象用DeletionHandlingMetaNamespaceKeyFunc计算对象键，用indexers计算索引键
+		// 可以想象成每个对象键是Namespace/Name，每个索引键是Namespace，即按照Namesapce分类
+		// 因为objType决定了只有一种类型对象，所以Namesapce是最大的分类
+		indexer: NewIndexer(DeletionHandlingMetaNamespaceKeyFunc, options.Indexers),
+		// 管理所有的监听器
+		processor: &sharedProcessor{clock: realClock},
+		// 给Controller用，确切的说是给Reflector用的
+		listerWatcher:     lw,
+		objectType:        exampleObject,
+		objectDescription: options.ObjectDescription,
+		// 无论是否需要定时同步，SharedInformer都提供了一个默认的同步时间，当然这个是外部设置的
 		resyncCheckPeriod:               options.ResyncPeriod,
 		defaultEventHandlerResyncPeriod: options.ResyncPeriod,
 		clock:                           realClock,
-		cacheMutationDetector:           NewCacheMutationDetector(fmt.Sprintf("%T", exampleObject)),
+		// 默认没有开启的对象突变检测器
+		cacheMutationDetector: NewCacheMutationDetector(fmt.Sprintf("%T", exampleObject)),
 	}
 }
 
@@ -297,6 +325,7 @@ type SharedIndexInformerOptions struct {
 }
 
 // InformerSynced is a function that can be used to determine if an informer has synced.  This is useful for determining if caches have synced.
+// InformerSynced是可用于确定informer是否已同步的函数。对于确定缓存是否已同步非常有用
 type InformerSynced func() bool
 
 const (
@@ -359,12 +388,21 @@ func WaitForCacheSync(stopCh <-chan struct{}, cacheSyncs ...InformerSynced) bool
 // sharedProcessor, which is responsible for relaying those
 // notifications to each of the informer's clients.
 type sharedIndexInformer struct {
+	// Indexer也是一种Store,Controller负责把Reflector和FIFO逻辑串联起来
+	// 这两个变量就涵盖Reflector、DeltaFIFO和LocalStore(cache)
 	indexer    Indexer
 	controller Controller
 
-	processor             *sharedProcessor
+	// sharedIndexInformer将ResourceEventHandler进行了封装，
+	// 并统一由sharedProcessor管理
+	processor *sharedProcessor
+	// CacheMutationDetector一个调试工具，用来发现对象突变的
+	// 实现方法:DeltaFIFO弹出的对象在处理前先备份(深度拷贝)一份,
+	// 然后定期比对两个对象是否相同,如果不同那就报警,
+	// 说明处理过程中有人修改过对象，这个功能默认是关闭
 	cacheMutationDetector MutationDetector
 
+	// reflector 使用
 	listerWatcher ListerWatcher
 
 	// objectType is an example object of the type this informer is expected to handle. If set, an event
@@ -376,6 +414,10 @@ type sharedIndexInformer struct {
 
 	// resyncCheckPeriod is how often we want the reflector's resync timer to fire so it can call
 	// shouldResync to check if any of our listeners need a resync.
+	// 定期同步的周期，可能存在多个ResourceEventHandler，
+	// 就有可能存在多个同步周期，sharedIndexInformer采用最小的周期
+	// 周期值就存储在resyncCheckPeriod中，
+	// 通过AddEventHandler()添加的处理器都采用defaultEventHandlerResyncPeriod
 	resyncCheckPeriod time.Duration
 	// defaultEventHandlerResyncPeriod is the default resync period for any handlers added via
 	// AddEventHandler (i.e. they don't specify one and just want to use the shared informer's default
@@ -384,6 +426,7 @@ type sharedIndexInformer struct {
 	// clock allows for testability
 	clock clock.Clock
 
+	// 启动停止标记，三个状态，启动前，已启动和已停止
 	started, stopped bool
 	startedLock      sync.Mutex
 
@@ -392,6 +435,9 @@ type sharedIndexInformer struct {
 	blockDeltas sync.Mutex
 
 	// Called whenever the ListAndWatch drops the connection with an error.
+	// DeltaFIFO每次Pop()的时候需要传入一个函数用来处理Deltas
+	// 处理Deltas也就意味着要把消息通知给处理器，如果此时调用了AddEventHandler()
+	// 就会存在崩溃的问题，所以要有这个锁，阻塞Deltas
 	watchErrorHandler WatchErrorHandler
 
 	transform TransformFunc
@@ -455,6 +501,9 @@ func (s *sharedIndexInformer) SetTransform(handler TransformFunc) error {
 	return nil
 }
 
+// sharedIndexInformer核心逻辑
+// 启动了Controller和sharedProcess()，
+// Controller通过DeltaFIFO.Pop()函数弹出Deltas，并调用函数sharedIndexInformer.HandleDeltas()处理
 func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 
@@ -462,13 +511,17 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 		klog.Warningf("The sharedIndexInformer has started, run more than once is not allowed")
 		return
 	}
+	// 在此处构造的DeltaFIFO
 	fifo := NewDeltaFIFOWithOptions(DeltaFIFOOptions{
 		KnownObjects:          s.indexer,
 		EmitDeltaTypeReplaced: true,
 	})
 
+	//Reflecto中的config
 	cfg := &Config{
-		Queue:             fifo,
+		// Reflector输入到DeltaFIFO
+		Queue: fifo,
+		// Reflector
 		ListerWatcher:     s.listerWatcher,
 		ObjectType:        s.objectType,
 		ObjectDescription: s.objectDescription,
@@ -476,10 +529,12 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 		RetryOnError:      false,
 		ShouldResync:      s.processor.shouldResync,
 
+		//Controller调用DeltaFIFO.Pop()接口传入的HandleDeltas这个回调函数
 		Process:           s.HandleDeltas,
 		WatchErrorHandler: s.watchErrorHandler,
 	}
 
+	// 创建controller
 	func() {
 		s.startedLock.Lock()
 		defer s.startedLock.Unlock()
@@ -490,6 +545,8 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 	}()
 
 	// Separate stop channel because Processor should be stopped strictly after controller
+	// 这个processorStopCh 是给sharedProcessor和cacheMutationDetector传递退出信号的
+	// 因为这里要创建两个协程运行sharedProcessor和cacheMutationDetector的核心函数
 	processorStopCh := make(chan struct{})
 	var wg wait.Group
 	defer wg.Wait()              // Wait for Processor to stop
@@ -497,11 +554,14 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 	wg.StartWithChannel(processorStopCh, s.cacheMutationDetector.Run)
 	wg.StartWithChannel(processorStopCh, s.processor.run)
 
+	// run函数退出，设置结束标志
 	defer func() {
 		s.startedLock.Lock()
 		defer s.startedLock.Unlock()
 		s.stopped = true // Don't want any new listeners
 	}()
+	// 启动Controller，Controller一旦运行，整个流程就开始启动了,
+	// 所以Contr是SharedInformer的发动机
 	s.controller.Run(stopCh)
 }
 
@@ -554,7 +614,9 @@ func (s *sharedIndexInformer) GetController() Controller {
 	return &dummyController{informer: s}
 }
 
+// 添加没有指定同步周期的事件处理器
 func (s *sharedIndexInformer) AddEventHandler(handler ResourceEventHandler) (ResourceEventHandlerRegistration, error) {
+	// defaultEventHandlerResyncPeriod是默认的同步周期，在创建SharedInformer的时候设置的
 	return s.AddEventHandlerWithResyncPeriod(handler, s.defaultEventHandlerResyncPeriod)
 }
 
@@ -575,21 +637,31 @@ func determineResyncPeriod(desired, check time.Duration) time.Duration {
 
 const minimumResyncPeriod = 1 * time.Second
 
+// 添加需要定期同步的事件处理器
 func (s *sharedIndexInformer) AddEventHandlerWithResyncPeriod(handler ResourceEventHandler, resyncPeriod time.Duration) (ResourceEventHandlerRegistration, error) {
+	// 是否已经开始对于添加事件处理器，将会影响处理方式
 	s.startedLock.Lock()
 	defer s.startedLock.Unlock()
 
+	// 是否已经结束
 	if s.stopped {
 		return nil, fmt.Errorf("handler %v was not added to shared informer because it has stopped already", handler)
 	}
 
+	// ===0 永远不用同步
 	if resyncPeriod > 0 {
+		// 同步周期不能太短，太短对于系统来说是个负担，
+		// 大量的无效计算浪费
 		if resyncPeriod < minimumResyncPeriod {
 			klog.Warningf("resyncPeriod %v is too small. Changing it to the minimum allowed value of %v", resyncPeriod, minimumResyncPeriod)
 			resyncPeriod = minimumResyncPeriod
 		}
 
+		// SharedInformer管理了很多处理器，每个处理器都有自己的同步周期，所以此处要统一成一个，称之为对齐
+		// SharedInformer会选择所有处理器中最小的那个作为所有处理器的同步周期，称为对齐后的同步周期
+		// 此处就要判断是不是比当前对齐后的同步周期还要小
 		if resyncPeriod < s.resyncCheckPeriod {
+			//已经启动，使用相同的周期
 			if s.started {
 				klog.Warningf("resyncPeriod %v is smaller than resyncCheckPeriod %v and the informer has already started. Changing it to %v", resyncPeriod, s.resyncCheckPeriod, s.resyncCheckPeriod)
 				resyncPeriod = s.resyncCheckPeriod
@@ -597,14 +669,17 @@ func (s *sharedIndexInformer) AddEventHandlerWithResyncPeriod(handler ResourceEv
 				// if the event handler's resyncPeriod is smaller than the current resyncCheckPeriod, update
 				// resyncCheckPeriod to match resyncPeriod and adjust the resync periods of all the listeners
 				// accordingly
+				// 如果没启动，将之前的的周期更新为新的周期
 				s.resyncCheckPeriod = resyncPeriod
 				s.processor.resyncCheckPeriodChanged(resyncPeriod)
 			}
 		}
 	}
 
+	// 创建监听器
 	listener := newProcessListener(handler, resyncPeriod, determineResyncPeriod(resyncPeriod, s.resyncCheckPeriod), s.clock.Now(), initialBufferSize, s.HasSynced)
 
+	// 没有启动直接添加监听器
 	if !s.started {
 		return s.processor.addListener(listener), nil
 	}
@@ -614,10 +689,14 @@ func (s *sharedIndexInformer) AddEventHandlerWithResyncPeriod(handler ResourceEv
 	// 2. do a list against the store
 	// 3. send synthetic "Add" events to the new handler
 	// 4. unblock
+	// 暂停所有的监听器
 	s.blockDeltas.Lock()
 	defer s.blockDeltas.Unlock()
 
+	// 添加处理器
 	handle := s.processor.addListener(listener)
+	// 遍历缓冲中的所有对象，通知处理器，因为SharedInformer已经启动了，可能很多对象已经让其他的处理器处理过了，
+	// 处理对象不会再通知新添加的处理器问题，
 	for _, item := range s.indexer.List() {
 		// Note that we enqueue these notifications with the lock held
 		// and before returning the handle. That means there is never a
@@ -632,7 +711,10 @@ func (s *sharedIndexInformer) AddEventHandlerWithResyncPeriod(handler ResourceEv
 	return handle, nil
 }
 
+// HandleDeltas 衔接Controller和sharedProcess,
+// 把Deltas转换为sharedProcess需要的各种Notification类型
 func (s *sharedIndexInformer) HandleDeltas(obj interface{}, isInInitialList bool) error {
+	// 阻塞处理器Deltas，事件分发到处理器
 	s.blockDeltas.Lock()
 	defer s.blockDeltas.Unlock()
 
@@ -652,6 +734,7 @@ func (s *sharedIndexInformer) OnAdd(obj interface{}, isInInitialList bool) {
 
 // Conforms to ResourceEventHandler
 func (s *sharedIndexInformer) OnUpdate(old, new interface{}) {
+	// 是否有同步产生事件
 	isSync := false
 
 	// If is a Sync event, isSync should be true
@@ -669,6 +752,7 @@ func (s *sharedIndexInformer) OnUpdate(old, new interface{}) {
 	// Invocation of this function is locked under s.blockDeltas, so it is
 	// save to distribute the notification
 	s.cacheMutationDetector.AddObject(new)
+	// 事件分发，通知处理器处理事件
 	s.processor.distribute(updateNotification{oldObj: old, newObj: new}, isSync)
 }
 
@@ -706,12 +790,15 @@ func (s *sharedIndexInformer) RemoveEventHandler(handle ResourceEventHandlerRegi
 // calls to shouldResync and (b) every listener is initially put in.
 // The non-sync distributions go to every listener.
 type sharedProcessor struct {
+	// 所有处理器是否已经启动的标识
 	listenersStarted bool
 	listenersLock    sync.RWMutex
 	// Map from listeners to whether or not they are currently syncing
+	// 通用的处理器
 	listeners map[*processorListener]bool
 	clock     clock.Clock
-	wg        wait.Group
+	// 了processorListener每个需要两个协程，用wait.Group来管理所有处理器的协程，都能退出
+	wg wait.Group
 }
 
 func (p *sharedProcessor) getListener(registration ResourceEventHandlerRegistration) *processorListener {
@@ -731,6 +818,7 @@ func (p *sharedProcessor) getListener(registration ResourceEventHandlerRegistrat
 	return nil
 }
 
+// 添加监听器，sharedIndexInformer.AddEventHandler()就会调用这个函数实现监听器的添加
 func (p *sharedProcessor) addListener(listener *processorListener) ResourceEventHandlerRegistration {
 	p.listenersLock.Lock()
 	defer p.listenersLock.Unlock()
@@ -741,6 +829,8 @@ func (p *sharedProcessor) addListener(listener *processorListener) ResourceEvent
 
 	p.listeners[listener] = true
 
+	//  wait.Group启动两个协程processorListener.run,processorListener.pop
+	//  p.listenersStarted,sharedProcessor在启动前、后都可以添加监听器器
 	if p.listenersStarted {
 		p.wg.Start(listener.run)
 		p.wg.Start(listener.pop)
@@ -791,20 +881,28 @@ func (p *sharedProcessor) distribute(obj interface{}, sync bool) {
 	}
 }
 
+// 等待退出信号然后关闭所有的处理器
 func (p *sharedProcessor) run(stopCh <-chan struct{}) {
+	// 启动前、后对于添加处理器的逻辑是不同，启动前的处理器是不会立刻启动连个协程执行处理器的pop()和run()函数的
+	// 而是在这里统一的启动
 	func() {
 		p.listenersLock.RLock()
 		defer p.listenersLock.RUnlock()
+		// 遍历所有的处理器，然后为处理器启动两个后台协程
 		for listener := range p.listeners {
 			p.wg.Start(listener.run)
 			p.wg.Start(listener.pop)
 		}
 		p.listenersStarted = true
 	}()
+	// 等待退出信号
 	<-stopCh
 
 	p.listenersLock.Lock()
 	defer p.listenersLock.Unlock()
+	// 关闭addCh，processorListener.pop()这个协程就会退出，
+	// 因为processorListener.pop()会关闭processorListener.nextCh，processorListener.run()就会退出
+	// 所以这里只要关闭processorListener.addCh就可以自动实现两个协程的退出
 	for listener := range p.listeners {
 		close(listener.addCh) // Tell .pop() to stop. .pop() will tell .run() to stop
 	}
@@ -821,6 +919,7 @@ func (p *sharedProcessor) run(stopCh <-chan struct{}) {
 
 // shouldResync queries every listener to determine if any of them need a resync, based on each
 // listener's resyncPeriod.
+// 判断是否应该同步
 func (p *sharedProcessor) shouldResync() bool {
 	p.listenersLock.Lock()
 	defer p.listenersLock.Unlock()
@@ -863,9 +962,14 @@ func (p *sharedProcessor) resyncCheckPeriodChanged(resyncCheckPeriod time.Durati
 //
 // processorListener also keeps track of the adjusted requested resync
 // period of the listener.
+// 实现了事件的缓冲和处理，此处的处理就是使用者传入的函数。
+// 在没有事件的时候可以阻塞处理器，当事件较多是可以把事件缓冲起来，实现了事件分发器与处理器的异步处理
+// run()和pop()函数是sharedProcessor启动的协程调用
 type processorListener struct {
+	// 这四个变量实现了事件的输入、缓冲、处理，事件就是apiserver资源的变化
 	nextCh chan interface{}
-	addCh  chan interface{}
+	//无缓冲chan
+	addCh chan interface{}
 
 	handler ResourceEventHandler
 
@@ -886,6 +990,12 @@ type processorListener struct {
 	// in AddEventHandlerWithResyncPeriod invocations made after the
 	// sharedIndexInformer starts and (b) only if the informer does
 	// resyncs at all.
+	// 下面四个变量就是跟定时同步相关，
+	// requestedResyncPeriod是处理器设定的定时同步周期
+	// resyncPeriod是跟sharedIndexInformer对齐的同步时间，
+	// 因为sharedIndexInformer管理了多个处理器
+	// 最终所有的处理器都会对齐到一个周期上，
+	// nextResync就是下一次同步的时间点
 	requestedResyncPeriod time.Duration
 	// resyncPeriod is the threshold that will be used in the logic
 	// for this listener.  This value differs from
@@ -923,6 +1033,7 @@ func newProcessListener(handler ResourceEventHandler, requestedResyncPeriod, res
 	return ret
 }
 
+//通过addCh传入notification事件
 func (p *processorListener) add(notification interface{}) {
 	if a, ok := notification.(addNotification); ok && a.isInInitialList {
 		p.syncTracker.Start()
@@ -930,44 +1041,64 @@ func (p *processorListener) add(notification interface{}) {
 	p.addCh <- notification
 }
 
+// 通过sharedProcessor利用wait.Group启动,处理接收、缓冲、发送
 func (p *processorListener) pop() {
 	defer utilruntime.HandleCrash()
 	defer close(p.nextCh) // Tell .run() to stop
 
 	var nextCh chan<- interface{}
 	var notification interface{}
+	// 死循环
 	for {
 		select {
+		// 有两种情况，nextCh还没有初始化，这个语句就会被阻塞
+		//nextChan后面会赋值为p.nextCh，因为p.nextCh也是无缓冲的chan,数据不发送成功就阻塞
 		case nextCh <- notification:
 			// Notification dispatched
+			// 如果发送成功了，那就从缓冲中再取一个事件出来
 			var ok bool
+			// 如果没有事件，那就把nextCh再次设置为nil，接下来对于nextCh操作还会被阻塞
 			notification, ok = p.pendingNotifications.ReadOne()
 			if !ok { // Nothing to pop
 				nextCh = nil // Disable this select case
 			}
+		// 消费p.addCh,从p.addCh读取一个事件出来
 		case notificationToAdd, ok := <-p.addCh:
+			// 说明p.addCh关闭了，只能退出
 			if !ok {
 				return
 			}
+			// notification为空说明当前还没发送任何事件给处理器
 			if notification == nil { // No notification to pop (and pendingNotifications is empty)
 				// Optimize the case - skip adding to pendingNotifications
+				// 把刚刚获取的事件通过p.nextCh发送个处理器
 				notification = notificationToAdd
 				nextCh = p.nextCh
 			} else { // There is already a notification waiting to be dispatched
+				// 上一个事件还没有发送成功，先放到缓存中
+				// pendingNotifications可以想象为一个slice
+				// 是一个动态的缓存，
 				p.pendingNotifications.WriteOne(notificationToAdd)
 			}
 		}
 	}
 }
 
+//通过sharedProcessor利用wait.Group启动
 func (p *processorListener) run() {
 	// this call blocks until the channel is closed.  When a panic happens during the notification
 	// we will catch it, **the offending item will be skipped!**, and after a short delay (one second)
 	// the next notification will be attempted.  This is usually better than the alternative of never
 	// delivering again.
+	// wait.Until需要传入退出信号的chan
 	stopCh := make(chan struct{})
+	//没有收到退出信号就会周期的执行传入的函数
 	wait.Until(func() {
+		// wait.ExponentialBackoff()和wait.Until()类似，wait.Until()是无限循环
+		// wait.ExponentialBackoff()是尝试几次，每次等待时间会以指数上涨
 		for next := range p.nextCh {
+			// 判断事件类型，这里面的handler就是调用SharedInfomer.AddEventHandler()传入的Deltas，
+			// 由SharedInformer做的二次封装变成了其他类型，
 			switch notification := next.(type) {
 			case updateNotification:
 				p.handler.OnUpdate(notification.oldObj, notification.newObj)
@@ -983,6 +1114,7 @@ func (p *processorListener) run() {
 			}
 		}
 		// the only way to get here is if the p.nextCh is empty and closed
+		//nextCh已经被关闭，关闭stopCh,通知wait.Until()退出
 		close(stopCh)
 	}, 1*time.Second, stopCh)
 }
