@@ -24,17 +24,17 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// RateLimiter 限速接口
+// 限速器
 type RateLimiter interface {
 	// When gets an item and gets to decide how long that item should wait
-	// 返回元素需要等待多长时间
+	// 返回一个元素需要等待的时间
 	When(item interface{}) time.Duration
 	// Forget indicates that an item is finished being retried.  Doesn't matter whether it's for failing
 	// or for success, we'll stop tracking it
-	// 放弃该元素(已经被处理了)
+	// 标识一个元素结束重试
 	Forget(item interface{})
 	// NumRequeues returns back how many failures the item has had
-	// 元素放入队列中的次数
+	// 标识一个元素已经被处理的次数
 	NumRequeues(item interface{}) int
 }
 
@@ -49,7 +49,7 @@ func DefaultControllerRateLimiter() RateLimiter {
 }
 
 // BucketRateLimiter adapts a standard bucket to the workqueue ratelimiter API
-// 固定速率(qps)的限速器
+// 标准库的令桶牌limiter的实现
 type BucketRateLimiter struct {
 	*rate.Limiter
 }
@@ -57,6 +57,7 @@ type BucketRateLimiter struct {
 var _ RateLimiter = &BucketRateLimiter{}
 
 func (r *BucketRateLimiter) When(item interface{}) time.Duration {
+	// 给当前元素发令牌的时间间隔
 	return r.Limiter.Reserve().Delay()
 }
 
@@ -69,6 +70,7 @@ func (r *BucketRateLimiter) Forget(item interface{}) {
 
 // ItemExponentialFailureRateLimiter does a simple baseDelay*2^<num-failures> limit
 // dealing with max failures and expiration are up to the caller
+// 失败次数越多限速越长，指数增长的限速器
 type ItemExponentialFailureRateLimiter struct {
 	failuresLock sync.Mutex
 	failures     map[interface{}]int
@@ -96,10 +98,13 @@ func (r *ItemExponentialFailureRateLimiter) When(item interface{}) time.Duration
 	defer r.failuresLock.Unlock()
 
 	exp := r.failures[item]
+	// 失败次数加1
 	r.failures[item] = r.failures[item] + 1
 
 	// The backoff is capped such that 'calculated' value never overflows.
+	// 每调用1次，exp加1,对应这里2^n指数
 	backoff := float64(r.baseDelay.Nanoseconds()) * math.Pow(2, float64(exp))
+	// 超过了最大整型，返回最大的时延
 	if backoff > math.MaxInt64 {
 		return r.maxDelay
 	}
@@ -127,13 +132,15 @@ func (r *ItemExponentialFailureRateLimiter) Forget(item interface{}) {
 }
 
 // ItemFastSlowRateLimiter does a quick retry for a certain number of attempts, then a slow retry after that
+// 快慢限速器: 达到指定阈值前快速重试，超过后慢速重试
 type ItemFastSlowRateLimiter struct {
 	failuresLock sync.Mutex
 	failures     map[interface{}]int
 
+	// 快速重试的次数
 	maxFastAttempts int
-	fastDelay       time.Duration
-	slowDelay       time.Duration
+	fastDelay       time.Duration // 快重试间隔
+	slowDelay       time.Duration // 慢重试间隔
 }
 
 var _ RateLimiter = &ItemFastSlowRateLimiter{}
@@ -151,8 +158,10 @@ func (r *ItemFastSlowRateLimiter) When(item interface{}) time.Duration {
 	r.failuresLock.Lock()
 	defer r.failuresLock.Unlock()
 
+	// 标识重试次数 +1
 	r.failures[item] = r.failures[item] + 1
 
+	// 为达到阈值返回快速重试
 	if r.failures[item] <= r.maxFastAttempts {
 		return r.fastDelay
 	}
@@ -177,6 +186,7 @@ func (r *ItemFastSlowRateLimiter) Forget(item interface{}) {
 // MaxOfRateLimiter calls every RateLimiter and returns the worst case response
 // When used with a token bucket limiter, the burst could be apparently exceeded in cases where particular items
 // were separately delayed a longer time.
+// 维护多个限速器列表，然后返回最严格的一个延时
 type MaxOfRateLimiter struct {
 	limiters []RateLimiter
 }
@@ -216,6 +226,7 @@ func (r *MaxOfRateLimiter) Forget(item interface{}) {
 }
 
 // WithMaxWaitRateLimiter have maxDelay which avoids waiting too long
+// 在其他限速器上包装一个最大延迟的属性，到了最大时延则直接返回
 type WithMaxWaitRateLimiter struct {
 	limiter  RateLimiter
 	maxDelay time.Duration

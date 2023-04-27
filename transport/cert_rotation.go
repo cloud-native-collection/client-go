@@ -35,18 +35,25 @@ import (
 const workItemKey = "key"
 
 // CertCallbackRefreshDuration is exposed so that integration tests can crank up the reload speed.
+// 控制证书回调函数（certCallback）的刷新速度,
+// Kubernetes的TLS客户端配置中，可以指定一个证书回调函数，用于在进行TLS握手时验证服务器端的证书。这个回调函数可以定期刷新证书，以确保证书的有效性。
 var CertCallbackRefreshDuration = 5 * time.Minute
 
 type reloadFunc func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
 
+// 动态地管理客户端证书，当证书过期或失效时，该结构体可以自动重新加载证书。
 type dynamicClientCert struct {
+	// 户端证书
 	clientCert *tls.Certificate
 	certMtx    sync.RWMutex
 
-	reload     reloadFunc
+	// 重新加载客户端证书的函数
+	reload reloadFunc
+	// 重新加载证书时创建新TCP连接的dialer
 	connDialer *connrotation.Dialer
 
 	// queue only ever has one item, but it has nice error handling backoff/retry semantics
+	// 存储证书刷新任务的队列,确保只有一个任务在运行，并且在出现错误时具有回退和重试的语义
 	queue workqueue.RateLimitingInterface
 }
 
@@ -61,6 +68,7 @@ func certRotatingDialer(reload reloadFunc, dial utilnet.DialFunc) *dynamicClient
 }
 
 // loadClientCert calls the callback and rotates connections if needed
+// 调用回调函数并在需要时旋转连接
 func (c *dynamicClientCert) loadClientCert() (*tls.Certificate, error) {
 	cert, err := c.reload(nil)
 	if err != nil {
@@ -68,6 +76,7 @@ func (c *dynamicClientCert) loadClientCert() (*tls.Certificate, error) {
 	}
 
 	// check to see if we have a change. If the values are the same, do nothing.
+	// 判断证书是否相同
 	c.certMtx.RLock()
 	haveCert := c.clientCert != nil
 	if certsEqual(c.clientCert, cert) {
@@ -76,15 +85,20 @@ func (c *dynamicClientCert) loadClientCert() (*tls.Certificate, error) {
 	}
 	c.certMtx.RUnlock()
 
+	// 更新证书
 	c.certMtx.Lock()
 	c.clientCert = cert
 	c.certMtx.Unlock()
 
 	// The first certificate requested is not a rotation that is worth closing connections for
+	// 第一个请求的证书不需要重新加载，因此无需关闭连接
 	if !haveCert {
 		return cert, nil
 	}
 
+	// 检测到证书刷新，需要关闭TCP连接并重新启动使用新的证书
+	// TCP连接是与证书绑定的，因此在证书发生变化时，需要关闭所有的TCP连接，以便使用新的证书创建新的TCP连接。
+	// 为了避免服务中断，第一个请求的证书不会被重新加载，只有第二个请求开始才会使用新的证书创建TCP连接。
 	klog.V(1).Infof("certificate rotation detected, shutting down client connections to start using new credentials")
 	c.connDialer.CloseAll()
 
@@ -129,7 +143,8 @@ func byteMatrixEqual(left, right [][]byte) bool {
 	return true
 }
 
-// run starts the controller and blocks until stopCh is closed.
+// Run starts the controller and blocks until stopCh is closed.
+// 启动controller 并阻塞直到stopCh关闭
 func (c *dynamicClientCert) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
@@ -152,6 +167,7 @@ func (c *dynamicClientCert) runWorker() {
 	}
 }
 
+// 从队列中获取证书刷新任务
 func (c *dynamicClientCert) processNextWorkItem() bool {
 	dsKey, quit := c.queue.Get()
 	if quit {
@@ -171,6 +187,7 @@ func (c *dynamicClientCert) processNextWorkItem() bool {
 	return true
 }
 
+// GetClientCertificate 获取证书
 func (c *dynamicClientCert) GetClientCertificate(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 	return c.loadClientCert()
 }

@@ -45,7 +45,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/runtime/serializer/streaming"
-	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/watch"
@@ -266,6 +265,26 @@ func TestRequestVersionedParamsFromListOptions(t *testing.T) {
 		"timeoutSeconds":  []string{"10"},
 	}) {
 		t.Errorf("should have set a param: %#v %v", r.params, r.err)
+	}
+}
+
+func TestRequestVersionedParamsWithInvalidScheme(t *testing.T) {
+	parameterCodec := runtime.NewParameterCodec(runtime.NewScheme())
+	r := (&Request{c: &RESTClient{content: ClientContentConfig{GroupVersion: v1.SchemeGroupVersion}}})
+	r.VersionedParams(&v1.PodExecOptions{Stdin: false, Stdout: true},
+		parameterCodec)
+
+	if r.Error() == nil {
+		t.Errorf("should have recorded an error: %#v", r.params)
+	}
+}
+
+func TestRequestError(t *testing.T) {
+	// Invalid body, see TestRequestBody()
+	r := (&Request{}).Body([]string{"test"})
+
+	if r.Error() != r.err {
+		t.Errorf("getter should be identical to reference: %#v %#v", r.Error(), r.err)
 	}
 }
 
@@ -905,22 +924,22 @@ func TestTransformUnstructuredError(t *testing.T) {
 				expect = err
 			}
 			if !reflect.DeepEqual(expect, transformed) {
-				t.Errorf("unexpected Error(): %s", diff.ObjectReflectDiff(expect, transformed))
+				t.Errorf("unexpected Error(): %s", cmp.Diff(expect, transformed))
 			}
 
 			// verify result.Get properly transforms the error
 			if _, err := result.Get(); !reflect.DeepEqual(expect, err) {
-				t.Errorf("unexpected error on Get(): %s", diff.ObjectReflectDiff(expect, err))
+				t.Errorf("unexpected error on Get(): %s", cmp.Diff(expect, err))
 			}
 
 			// verify result.Into properly handles the error
 			if err := result.Into(&v1.Pod{}); !reflect.DeepEqual(expect, err) {
-				t.Errorf("unexpected error on Into(): %s", diff.ObjectReflectDiff(expect, err))
+				t.Errorf("unexpected error on Into(): %s", cmp.Diff(expect, err))
 			}
 
 			// verify result.Raw leaves the error in the untransformed state
 			if _, err := result.Raw(); !reflect.DeepEqual(result.err, err) {
-				t.Errorf("unexpected error on Raw(): %s", diff.ObjectReflectDiff(expect, err))
+				t.Errorf("unexpected error on Raw(): %s", cmp.Diff(expect, err))
 			}
 		})
 	}
@@ -1200,7 +1219,7 @@ func TestRequestWatch(t *testing.T) {
 						t.Fatalf("Watch closed early, %d/%d read", i, len(testCase.Expect))
 					}
 					if !reflect.DeepEqual(evt, out) {
-						t.Fatalf("Event %d does not match: %s", i, diff.ObjectReflectDiff(evt, out))
+						t.Fatalf("Event %d does not match: %s", i, cmp.Diff(evt, out))
 					}
 				}
 			}
@@ -2991,6 +3010,7 @@ type withRateLimiterBackoffManagerAndMetrics struct {
 	metrics.ResultMetric
 	calculateBackoffSeq int64
 	calculateBackoffFn  func(i int64) time.Duration
+	metrics.RetryMetric
 
 	invokeOrderGot []string
 	sleepsGot      []string
@@ -3023,6 +3043,14 @@ func (lb *withRateLimiterBackoffManagerAndMetrics) Increment(ctx context.Context
 	// we are interested in the request context that is marked by this test
 	if marked, ok := ctx.Value(retryTestKey).(bool); ok && marked {
 		lb.invokeOrderGot = append(lb.invokeOrderGot, "RequestResult.Increment")
+		lb.statusCodesGot = append(lb.statusCodesGot, code)
+	}
+}
+
+func (lb *withRateLimiterBackoffManagerAndMetrics) IncrementRetry(ctx context.Context, code, _, _ string) {
+	// we are interested in the request context that is marked by this test
+	if marked, ok := ctx.Value(retryTestKey).(bool); ok && marked {
+		lb.invokeOrderGot = append(lb.invokeOrderGot, "RequestRetry.IncrementRetry")
 		lb.statusCodesGot = append(lb.statusCodesGot, code)
 	}
 }
@@ -3072,13 +3100,17 @@ func testRetryWithRateLimiterBackoffAndMetrics(t *testing.T, key string, doFunc 
 		"Client.Do",
 
 		// it's a success, so do the following:
-		//  - call metrics and update backoff parameters
+		// count the result metric, and since it's a retry,
+		// count the retry metric, and then update backoff parameters.
 		"RequestResult.Increment",
+		"RequestRetry.IncrementRetry",
 		"BackoffManager.UpdateBackoff",
 	}
 	statusCodesWant := []string{
+		// first attempt (A): we count the result metric only
 		"500",
-		"200",
+		// final attempt (B): we count the result metric, and the retry metric
+		"200", "200",
 	}
 
 	tests := []struct {
@@ -3192,10 +3224,13 @@ func testRetryWithRateLimiterBackoffAndMetrics(t *testing.T, key string, doFunc 
 			//  to override as well, and we want tests to be able to run in
 			//  parallel then we will need to provide a way for tests to
 			//  register/deregister their own metric inerfaces.
-			old := metrics.RequestResult
+			oldRequestResult := metrics.RequestResult
+			oldRequestRetry := metrics.RequestRetry
 			metrics.RequestResult = interceptor
+			metrics.RequestRetry = interceptor
 			defer func() {
-				metrics.RequestResult = old
+				metrics.RequestResult = oldRequestResult
+				metrics.RequestRetry = oldRequestRetry
 			}()
 
 			ctx, cancel := context.WithCancel(context.Background())

@@ -36,6 +36,9 @@ import (
 // behavior but then must hijack the underlying connection (like WebSocket or
 // HTTP2 clients). Pure HTTP clients should use the RoundTripper returned from
 // New.
+// HTTPWrappersForConfig用于将一个http.RoundTripper对象包装起来，并加入配置文件中的任何相关分层行为。
+// 公开此函数的目的是允许使用需要HTTP类似行为的客户端接管底层连接，例如WebSocket或HTTP2客户端。
+// 对于纯HTTP客户端，应该使用从New函数返回的http.RoundTripper对象
 func HTTPWrappersForConfig(config *Config, rt http.RoundTripper) (http.RoundTripper, error) {
 	if config.WrapTransport != nil {
 		rt = config.WrapTransport(rt)
@@ -69,6 +72,7 @@ func HTTPWrappersForConfig(config *Config, rt http.RoundTripper) (http.RoundTrip
 }
 
 // DebugWrappers wraps a round tripper and logs based on the current log level.
+// DebugWrappers包装一个RoundTripper并根据当前日志级别记录日志。
 func DebugWrappers(rt http.RoundTripper) http.RoundTripper {
 	switch {
 	case bool(klog.V(9).Enabled()):

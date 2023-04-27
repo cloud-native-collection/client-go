@@ -155,6 +155,8 @@ func TLSConfigFor(c *Config) (*tls.Config, error) {
 // loadTLSFiles copies the data from the CertFile, KeyFile, and CAFile fields into the CertData,
 // KeyData, and CAFile fields, or returns an error. If no error is returned, all three fields are
 // either populated or were empty to start.
+// 从CertFile,KeyFile及CAFile复制数据到Config的CerData，KeyData和CAFile字段中，或者返回一个错误，
+// 如果没有报错,说明所有三个字段都已经被填充，或者在开始时它们就是空的。
 func loadTLSFiles(c *Config) error {
 	var err error
 	c.TLS.CAData, err = dataFromSliceOrFile(c.TLS.CAData, c.TLS.CAFile)
@@ -178,6 +180,7 @@ func loadTLSFiles(c *Config) error {
 
 // dataFromSliceOrFile returns data from the slice (if non-empty), or from the file,
 // or an error if an error occurred reading the file
+// 从切片或者文件中获取数据
 func dataFromSliceOrFile(data []byte, file string) ([]byte, error) {
 	if len(data) > 0 {
 		return data, nil

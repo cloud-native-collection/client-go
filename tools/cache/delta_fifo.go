@@ -61,6 +61,10 @@ type DeltaFIFOOptions struct {
 	// When true, `Replaced` events will be sent for items passed to a Replace() call.
 	// When false, `Sync` events will be sent instead.
 	EmitDeltaTypeReplaced bool
+
+	// If set, will be called for objects before enqueueing them. Please
+	// see the comment on TransformFunc for details.
+	Transformer TransformFunc
 }
 
 // DeltaFIFO is like FIFO, but differs in two ways.  One is that the
@@ -156,7 +160,31 @@ type DeltaFIFO struct {
 	// DeltaType when Replace() is called (to preserve backwards compat).
 	// 是发出替换还是同步(true)
 	emitDeltaTypeReplaced bool
+
+	// Called with every object if non-nil.
+	transformer TransformFunc
 }
+
+// TransformFunc allows for transforming an object before it will be processed.
+// TransformFunc (similarly to ResourceEventHandler functions) should be able
+// to correctly handle the tombstone of type cache.DeletedFinalStateUnknown.
+//
+// New in v1.27: In such cases, the contained object will already have gone
+// through the transform object separately (when it was added / updated prior
+// to the delete), so the TransformFunc can likely safely ignore such objects
+// (i.e., just return the input object).
+//
+// The most common usage pattern is to clean-up some parts of the object to
+// reduce component memory usage if a given component doesn't care about them.
+//
+// New in v1.27: unless the object is a DeletedFinalStateUnknown, TransformFunc
+// sees the object before any other actor, and it is now safe to mutate the
+// object in place instead of making a copy.
+//
+// Note that TransformFunc is called while inserting objects into the
+// notification queue and is therefore extremely performance sensitive; please
+// do not do anything that will take a long time.
+type TransformFunc func(interface{}) (interface{}, error)
 
 // DeltaType is the type of a change (addition, deletion, etc)
 type DeltaType string
@@ -259,6 +287,7 @@ func NewDeltaFIFOWithOptions(opts DeltaFIFOOptions) *DeltaFIFO {
 		knownObjects: opts.KnownObjects,
 
 		emitDeltaTypeReplaced: opts.EmitDeltaTypeReplaced,
+		transformer:           opts.Transformer,
 	}
 	f.cond.L = &f.lock
 	return f
@@ -482,7 +511,21 @@ func (f *DeltaFIFO) queueActionLocked(actionType DeltaType, obj interface{}) err
 	if err != nil {
 		return KeyError{obj, err}
 	}
-	// 旧的对象操作数组
+
+	// Every object comes through this code path once, so this is a good
+	// place to call the transform func.  If obj is a
+	// DeletedFinalStateUnknown tombstone, then the containted inner object
+	// will already have gone through the transformer, but we document that
+	// this can happen. In cases involving Replace(), such an object can
+	// come through multiple times.
+	if f.transformer != nil {
+		var err error
+		obj, err = f.transformer(obj)
+		if err != nil {
+			return err
+		}
+	}
+
 	oldDeltas := f.items[id]
 	// 同一个对象的多次操作，所以要追加到Deltas数组中
 	newDeltas := append(oldDeltas, Delta{actionType, obj})
@@ -659,12 +702,11 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 // using the Sync or Replace DeltaType and then (2) it does some deletions.
 // In particular: for every pre-existing key K that is not the key of
 // an object in `list` there is the effect of
-// `Delete(DeletedFinalStateUnknown{K, O})` where O is current object
-// of K.  If `f.knownObjects == nil` then the pre-existing keys are
-// those in `f.items` and the current object of K is the `.Newest()`
-// of the Deltas associated with K.  Otherwise the pre-existing keys
-// are those listed by `f.knownObjects` and the current object of K is
-// what `f.knownObjects.GetByKey(K)` returns.
+// `Delete(DeletedFinalStateUnknown{K, O})` where O is the latest known
+// object of K. The pre-existing keys are those in the union set of the keys in
+// `f.items` and `f.knownObjects` (if not nil). The last known object for key K is
+// the one present in the last delta in `f.items`. If there is no delta for K
+// in `f.items`, it is the object in `f.knownObjects`
 // DeltaFIFO对外输出的就是所有目标的增量变化
 // 所以每次全量更新都要判断对象是否已经删除，因为在全量更新前可能没有收到目标删除的请求。
 //这一点与cache不同，cache的Replace()相当于重建，因为cache就是对象全量的一种内存映射，所以Replace()就等于重建
@@ -696,69 +738,53 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 		}
 	}
 
-	// 如果没有存储(indxer)的话，自己存储的就是所有的老对象，
-	// 查找不在全量集合中的老对象即删除的对象
-	if f.knownObjects == nil {
-		// Do deletion detection against our own list.
-		queuedDeletions := 0
-		for k, oldItem := range f.items {
-			// 目标在输入的对象中存在就忽略
-			if keys.Has(k) {
-				continue
-			}
-			// Delete pre-existing items not in the new list.
-			// This could happen if watch deletion event was missed while
-			// disconnected from apiserver.
-			var deletedObj interface{}
-			// 输入对象中没有，说明对象已经被删除
-			if n := oldItem.Newest(); n != nil {
-				deletedObj = n.Object
-			}
-			// 累计删除对象
-			queuedDeletions++
-			//队列中存储对象的Deltas数组中,可能已经存在Delete了，
-			//避免重复，采用DeletedFinalStateUnknown这种类型
-			if err := f.queueActionLocked(Deleted, DeletedFinalStateUnknown{k, deletedObj}); err != nil {
-				return err
-			}
-		}
-
-		// 如果populated还没有设置，说明是第一次并且还没有任何修改操作执行过
-		if !f.populated {
-			f.populated = true
-			// While there shouldn't be any queued deletions in the initial
-			// population of the queue, it's better to be on the safe side.
-			// 记录第一次通过来的对象数量
-			f.initialPopulationCount = keys.Len() + queuedDeletions
-		}
-
-		return nil
-	}
-
-	// Detect deletions not already in the queue.
-	//处理检测某些目标删除但是Delta没有在队列中
-	// 从存储中获取所有对象键
-	knownKeys := f.knownObjects.ListKeys()
+	// Do deletion detection against objects in the queue
 	queuedDeletions := 0
-	for _, k := range knownKeys {
-		// 忽略对象存在的情况
+	for k, oldItem := range f.items {
 		if keys.Has(k) {
 			continue
 		}
+		// Delete pre-existing items not in the new list.
+		// This could happen if watch deletion event was missed while
+		// disconnected from apiserver.
+		var deletedObj interface{}
+		if n := oldItem.Newest(); n != nil {
+			deletedObj = n.Object
 
-		//获取对象
-		deletedObj, exists, err := f.knownObjects.GetByKey(k)
-		if err != nil {
-			deletedObj = nil
-			klog.Errorf("Unexpected error %v during lookup of key %v, placing DeleteFinalStateUnknown marker without object", err, k)
-		} else if !exists {
-			deletedObj = nil
-			klog.Infof("Key %v does not exist in known objects store, placing DeleteFinalStateUnknown marker without object", k)
+			// if the previous object is a DeletedFinalStateUnknown, we have to extract the actual Object
+			if d, ok := deletedObj.(DeletedFinalStateUnknown); ok {
+				deletedObj = d.Obj
+			}
 		}
-		//累计删除对象
 		queuedDeletions++
 		if err := f.queueActionLocked(Deleted, DeletedFinalStateUnknown{k, deletedObj}); err != nil {
 			return err
+		}
+	}
+
+	if f.knownObjects != nil {
+		// Detect deletions for objects not present in the queue, but present in KnownObjects
+		knownKeys := f.knownObjects.ListKeys()
+		for _, k := range knownKeys {
+			if keys.Has(k) {
+				continue
+			}
+			if len(f.items[k]) > 0 {
+				continue
+			}
+
+			deletedObj, exists, err := f.knownObjects.GetByKey(k)
+			if err != nil {
+				deletedObj = nil
+				klog.Errorf("Unexpected error %v during lookup of key %v, placing DeleteFinalStateUnknown marker without object", err, k)
+			} else if !exists {
+				deletedObj = nil
+				klog.Infof("Key %v does not exist in known objects store, placing DeleteFinalStateUnknown marker without object", k)
+			}
+			queuedDeletions++
+			if err := f.queueActionLocked(Deleted, DeletedFinalStateUnknown{k, deletedObj}); err != nil {
+				return err
+			}
 		}
 	}
 
