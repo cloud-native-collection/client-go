@@ -27,6 +27,7 @@ import (
 )
 
 // Lister is any object that knows how to perform an initial list.
+// 获取对象
 type Lister interface {
 	// List should return a list type object; the Items field will be extracted, and the
 	// ResourceVersion field will be used to start the watch in the right place.
@@ -35,6 +36,7 @@ type Lister interface {
 }
 
 // Watcher is any object that knows how to start a watch on a resource.
+// 监控对象的变化
 type Watcher interface {
 	// Watch should begin a watch at the specified version.
 	// 根据选项监控对象变化
