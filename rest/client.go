@@ -38,7 +38,7 @@ const (
 )
 
 // Interface captures the set of operations for generically interacting with Kubernetes REST apis.
-// 定义与kubernetes rest api 交互的一组接口
+// 定义与 kubernetes rest api 交互的一组接口
 type Interface interface {
 	GetRateLimiter() flowcontrol.RateLimiter
 	Verb(verb string) *Request

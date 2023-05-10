@@ -328,13 +328,17 @@ func (r *Reflector) resyncChan() (<-chan time.Time, func() bool) {
 // ListAndWatch first lists all items and get the resource version at the moment of call,
 // and then use the resource version to watch.
 // It returns error if ListAndWatch didn't even try to initialize watch.
+// 从给定源列出和监听资源的函数,首先尝试列出所有项目并获取调用时的资源版本，然后使用资源版本进行监听
+// 如果在尝试初始化监听时 ListAndWatch 未执行，它将返回错误。
 func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 	klog.V(3).Infof("Listing and watching %v from %s", r.typeDescription, r.name)
 	var err error
 	var w watch.Interface
 	fallbackToList := !r.UseWatchList
 
+	// 尝试监听资源列表
 	if r.UseWatchList {
+		// 尝试获取某资源相关条件下的所有对象
 		w, err = r.watchList(stopCh)
 		if w == nil && err == nil {
 			// stopCh was closed
@@ -351,6 +355,7 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 		}
 	}
 
+	// 尝试列出资源
 	if fallbackToList {
 		// 尝试获取某资源相关条件下的所有对象
 		err = r.list(stopCh)
@@ -613,6 +618,20 @@ func (r *Reflector) list(stopCh <-chan struct{}) error {
 // After receiving a "Bookmark" event the reflector is considered to be synchronized.
 // It replaces its internal store with the collected items and
 // reuses the current watch requests for getting further events.
+// 用于建立一个与服务器的数据流，以便从服务器获取一致的数据快照。
+// 其描述参见 https://github.com/kubernetes/enhancements/tree/master/keps/sig-api-machinery/3157-watch-list#proposal 。
+//
+// 此函数主要有两种情况：
+//
+// 情况 1：从最近资源版本开始 (RV=""，ResourceVersionMatch=ResourceVersionMatchNotOlderThan)
+// 此情况下，与服务器建立一致的数据流。返回的数据与通过 etcd 的 quorum 读取直接提供的数据一致。
+// 数据流以最近资源版本的所有资源的合成 "Added" 事件开始，并以包含最近资源版本的合成 "Bookmark" 事件结束。
+// 在收到 "Bookmark" 事件后，reflector 被认为已同步。它用收集到的项目替换其内部存储，并重用当前监听请求以获取更多事件。
+//
+// 情况 2：从精确资源版本开始 (RV>"0"，ResourceVersionMatch=ResourceVersionMatchNotOlderThan)
+// 此情况下，与服务器在提供的资源版本处建立数据流。为了建立初始状态，服务器从合成 "Added" 事件开始，
+// 并以包含提供的或更新资源版本的合成 "Bookmark" 事件结束。在收到 "Bookmark" 事件后，reflector 被认为已同步。
+// 它用收集到的项目替换其内部存储，并重用当前监听请求以获取更多事件。
 func (r *Reflector) watchList(stopCh <-chan struct{}) (watch.Interface, error) {
 	var w watch.Interface
 	var err error
@@ -638,6 +657,7 @@ func (r *Reflector) watchList(stopCh <-chan struct{}) (watch.Interface, error) {
 		return false
 	}
 
+	// 记录 "Reflector WatchList" 的执行情况
 	initTrace := trace.New("Reflector WatchList", trace.Field{Key: "name", Value: r.name})
 	defer initTrace.LogIfLong(10 * time.Second)
 	for {
@@ -702,7 +722,7 @@ func (r *Reflector) watchList(stopCh <-chan struct{}) (watch.Interface, error) {
 }
 
 // syncWith replaces the store's items with the given list.
-// 实现apiserver的全量同步
+// 实现`apiserver`的全量同步
 func (r *Reflector) syncWith(items []runtime.Object, resourceVersion string) error {
 	// slice类型转换
 	found := make([]interface{}, 0, len(items))

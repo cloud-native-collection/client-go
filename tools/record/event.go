@@ -89,6 +89,12 @@ type CorrelatorOptions struct {
 }
 
 // EventRecorder knows how to record events on behalf of an EventSource.
+// 参数说明：
+//object 对应event资源定义中的 involvedObject
+//eventtype 对应event资源定义中的type，可选Normal，Warning.
+//reason ：事件原因
+//message ：事件消息
+// 写入事件
 type EventRecorder interface {
 	// Event constructs an event from the given information and puts it in the queue for sending.
 	// 'object' is the object this event is about. Event will make a reference-- or you may also
@@ -111,6 +117,7 @@ type EventRecorder interface {
 }
 
 // EventBroadcaster knows how to receive events and send them to any EventSink, watcher, or log.
+// eventBroadcasterImpl  struct来实现了各个方法 消费事件
 type EventBroadcaster interface {
 	// StartEventWatcher starts sending events received from this EventBroadcaster to the given
 	// event handler function. The return value can be ignored or used to stop recording, if
@@ -119,14 +126,17 @@ type EventBroadcaster interface {
 
 	// StartRecordingToSink starts sending events received from this EventBroadcaster to the given
 	// sink. The return value can be ignored or used to stop recording, if desired.
+	// StartLogging 和 StartRecordingToSink 其实就是完成了对事件的消费
 	StartRecordingToSink(sink EventSink) watch.Interface
 
 	// StartLogging starts sending events received from this EventBroadcaster to the given logging
 	// function. The return value can be ignored or used to stop recording, if desired.
+	// 直接将event输出到日志
 	StartLogging(logf func(format string, args ...interface{})) watch.Interface
 
 	// StartStructuredLogging starts sending events received from this EventBroadcaster to the structured
 	// logging function. The return value can be ignored or used to stop recording, if desired.
+	// 将事件写入到apiserve
 	StartStructuredLogging(verbosity klog.Level) watch.Interface
 
 	// NewRecorder returns an EventRecorder that can be used to send events to this EventBroadcaster
@@ -211,6 +221,7 @@ func (e *eventBroadcasterImpl) recordToSink(sink EventSink, event *v1.Event, eve
 	// Events are safe to copy like this.
 	eventCopy := *event
 	event = &eventCopy
+	// 事件处理
 	result, err := eventCorrelator.EventCorrelate(event)
 	if err != nil {
 		utilruntime.HandleError(err)
@@ -324,6 +335,7 @@ func (e *eventBroadcasterImpl) StartEventWatcher(eventHandler func(*v1.Event)) w
 				// ever happen.
 				continue
 			}
+			// 处理event
 			eventHandler(event)
 		}
 	}()
@@ -335,6 +347,7 @@ func (e *eventBroadcasterImpl) NewRecorder(scheme *runtime.Scheme, source v1.Eve
 	return &recorderImpl{scheme, source, e.Broadcaster, clock.RealClock{}}
 }
 
+// 实现event的写入和消费接口
 type recorderImpl struct {
 	scheme *runtime.Scheme
 	source v1.EventSource
@@ -342,6 +355,7 @@ type recorderImpl struct {
 	clock clock.PassiveClock
 }
 
+// 生成event
 func (recorder *recorderImpl) generateEvent(object runtime.Object, annotations map[string]string, eventtype, reason, message string) {
 	ref, err := ref.GetReference(recorder.scheme, object)
 	if err != nil {
@@ -354,6 +368,7 @@ func (recorder *recorderImpl) generateEvent(object runtime.Object, annotations m
 		return
 	}
 
+	// makeEvent构造了一个event对象，事件name根据InvolvedObject中的name加上时间戳生成：
 	event := recorder.makeEvent(ref, annotations, eventtype, reason, message)
 	event.Source = recorder.source
 
@@ -362,6 +377,7 @@ func (recorder *recorderImpl) generateEvent(object runtime.Object, annotations m
 	// when we go to shut down this broadcaster.  Just drop events if we get overloaded,
 	// and log an error if that happens (we've configured the broadcaster to drop
 	// outgoing events anyway).
+	// goroutine 中通过调用 ActionOrDrop 进入处理，这里保证了每次调用event方法都是非阻塞的
 	sent, err := recorder.ActionOrDrop(watch.Added, event)
 	if err != nil {
 		klog.Errorf("unable to record event: %v (will not retry!)", err)
@@ -384,6 +400,7 @@ func (recorder *recorderImpl) AnnotatedEventf(object runtime.Object, annotations
 	recorder.generateEvent(object, annotations, eventtype, reason, fmt.Sprintf(messageFmt, args...))
 }
 
+// makeEvent构造了一个event对象，事件name根据InvolvedObject中的name加上时间戳生成：
 func (recorder *recorderImpl) makeEvent(ref *v1.ObjectReference, annotations map[string]string, eventtype, reason, message string) *v1.Event {
 	t := metav1.Time{Time: recorder.clock.Now()}
 	namespace := ref.Namespace

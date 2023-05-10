@@ -498,7 +498,7 @@ func (s *sharedIndexInformer) SetTransform(handler TransformFunc) error {
 	return nil
 }
 
-// sharedIndexInformer核心逻辑
+// Run sharedIndexInformer核心逻辑
 // 启动了Controller和sharedProcess()，
 // Controller通过DeltaFIFO.Pop()函数弹出Deltas，并调用函数sharedIndexInformer.HandleDeltas()处理
 func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
