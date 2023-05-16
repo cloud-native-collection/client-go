@@ -32,9 +32,13 @@ import (
 var serverIsOverloadedSet = sets.NewInt(429)
 var maxResponseCode = 499
 
+// BackoffManager 处理请求之间的间隔(退避值)
 type BackoffManager interface {
+	// UpdateBackoff 更新特定 URL 的退避值。这个方法根据发生的错误和响应代码来调整后续请求的退避时间。
 	UpdateBackoff(actualUrl *url.URL, err error, responseCode int)
+	// CalculateBackoff 计算特定 URL 的退避时间。这是一个根据之前的错误和响应代码来计算应等待多长时间才发送下一个请求的函数。
 	CalculateBackoff(actualUrl *url.URL) time.Duration
+	// Sleep 睡眠特定的时间长度。这个方法使当前的 goroutine 暂停执行特定的时间长度，通常等于退避时间。
 	Sleep(d time.Duration)
 }
 

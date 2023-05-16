@@ -92,6 +92,8 @@ func defaultRequestRetryFn(maxRetries int) WithRetry {
 // Request allows for building up a request to a server in a chained fashion.
 // Any errors are stored until the end of your call, so you only have to
 // check once.
+// Request 可以链式构建一个请求到服务端
+// 所有的错误都会存储直到调用结束，所以只需要处理一次错误
 type Request struct {
 	c *RESTClient
 
@@ -103,6 +105,7 @@ type Request struct {
 	maxRetries  int
 
 	// generic components accessible via method setters
+	// 生成访问的方法设置
 	verb       string
 	pathPrefix string
 	subpath    string
@@ -110,6 +113,7 @@ type Request struct {
 	headers    http.Header
 
 	// structural elements of the request that are part of the Kubernetes API conventions
+	// 请求的结构元素Kubernetes API规范的一部分
 	namespace    string
 	namespaceSet bool
 	resource     string
@@ -120,6 +124,7 @@ type Request struct {
 	err error
 
 	// only one of body / bodyBytes may be set. requests using body are not retriable.
+	// body/bodyBysets只会有一个被设置，当请求使用Body时无法请求重试
 	body      io.Reader
 	bodyBytes []byte
 
@@ -127,6 +132,7 @@ type Request struct {
 }
 
 // NewRequest creates a new request helper object for accessing runtime.Objects on a server.
+// 创建一个请求的 helper 向 server 获取 runtime.Objects
 func NewRequest(c *RESTClient) *Request {
 	var backoff BackoffManager
 	if c.createBackoffMgr != nil {
@@ -169,6 +175,7 @@ func NewRequest(c *RESTClient) *Request {
 }
 
 // NewRequestWithClient creates a Request with an embedded RESTClient for use in test scenarios.
+// NewRequestWithClient创建一个使用嵌入RESTClient的Request用于测试场景。
 func NewRequestWithClient(base *url.URL, versionedAPIPath string, content ClientContentConfig, client *http.Client) *Request {
 	return NewRequest(&RESTClient{
 		base:             base,
@@ -179,6 +186,7 @@ func NewRequestWithClient(base *url.URL, versionedAPIPath string, content Client
 }
 
 // Verb sets the verb this request will use.
+// 设置请求将使用的动词
 func (r *Request) Verb(verb string) *Request {
 	r.verb = verb
 	return r
@@ -699,33 +707,43 @@ func (b *throttledLogger) Infof(message string, args ...interface{}) {
 
 // Watch attempts to begin watching the requested location.
 // Returns a watch.Interface, or an error.
+// 将会监控请求的地址
 func (r *Request) Watch(ctx context.Context) (watch.Interface, error) {
 	// We specifically don't want to rate limit watches, so we
 	// don't use r.rateLimiter here.
+	//　检查是否有存储的错误
 	if r.err != nil {
 		return nil, r.err
 	}
 
+	// 获取http客户端，如果请求中没有指定客户端，使用默认的客户端
 	client := r.c.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
 
+	// 检查请求的错误是否可以重试。如果错误是可能的 EOF 或超时，
+	// 函数会返回 true，表示可以重试。
 	isErrRetryableFunc := func(request *http.Request, err error) bool {
 		// The watch stream mechanism handles many common partial data errors, so closed
 		// connections can be retried in many cases.
+		//　watch流机制处理许多常见的部分数据错误,所以关闭连接可以在许多情况下重试。
 		if net.IsProbableEOF(err) || net.IsTimeout(err) {
 			return true
 		}
 		return false
 	}
+	// 创建一个重试机制
 	retry := r.retryFn(r.maxRetries)
 	url := r.URL().String()
+	// 循环阻塞,反复发送请求。
 	for {
+		// 检查是否应该重试,Before返回错误，函数会停止重试并返回错误。
 		if err := retry.Before(ctx, r); err != nil {
 			return nil, retry.WrapPreviousError(err)
 		}
 
+		// 创建新的 HTTP 请求，并通过客户端发送该请求。
 		req, err := r.newHTTPRequest(ctx)
 		if err != nil {
 			return nil, err
@@ -734,12 +752,15 @@ func (r *Request) Watch(ctx context.Context) (watch.Interface, error) {
 		resp, err := client.Do(req)
 		retry.After(ctx, r, resp, err)
 		if err == nil && resp.StatusCode == http.StatusOK {
+			// 创建一个新的监视器，并返回该监视器。
 			return r.newStreamWatcher(resp)
 		}
 
+		// 请求失败或响应状态码不为 200，函数使用闭包进行错误处理。
 		done, transformErr := func() (bool, error) {
 			defer readAndCloseResponseBody(resp)
 
+			// 判断错误是否可以重试
 			if retry.IsNextRetry(ctx, r, req, resp, err, isErrRetryableFunc) {
 				return false, nil
 			}
@@ -754,6 +775,7 @@ func (r *Request) Watch(ctx context.Context) (watch.Interface, error) {
 			return true, fmt.Errorf("for request %s, got status: %v", url, resp.StatusCode)
 		}()
 		if done {
+			// 错误是可以重试的，函数返回一个空的监视器
 			if isErrRetryableFunc(req, err) {
 				return watch.NewEmptyWatch(), nil
 			}
@@ -767,12 +789,16 @@ func (r *Request) Watch(ctx context.Context) (watch.Interface, error) {
 	}
 }
 
+// 从 HTTP 响应中创建一个新的流监视器（Stream Watcher）
 func (r *Request) newStreamWatcher(resp *http.Response) (watch.Interface, error) {
+	// 从 HTTP 响应的头部获取内容类型
 	contentType := resp.Header.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		klog.V(4).Infof("Unexpected content type from the server: %q: %v", contentType, err)
 	}
+	// 通过 Negotiator 的 StreamDecoder 方法获取对象解码器（objectDecoder）、
+	// 流化序列化器（streamingSerializer）和帧制作器（framer）。
 	objectDecoder, streamingSerializer, framer, err := r.c.content.Negotiator.StreamDecoder(mediaType, params)
 	if err != nil {
 		return nil, err
@@ -780,10 +806,14 @@ func (r *Request) newStreamWatcher(resp *http.Response) (watch.Interface, error)
 
 	handleWarnings(resp.Header, r.warningHandler)
 
+	// 创建一个新的帧读取器（frameReader）。帧读取器用于从 HTTP 响应的主体中读取数据
 	frameReader := framer.NewFrameReader(resp.Body)
+	// 使用流化序列化器创建一个新的监视事件解码器
 	watchEventDecoder := streaming.NewDecoder(frameReader, streamingSerializer)
 
+	// 返回一个新的流式监视器，该监视器会报告 HTTP 状态码为 500 的错误。
 	return watch.NewStreamWatcher(
+		// 创建的新解码器和前面得到的对象解码器
 		restclientwatch.NewDecoder(watchEventDecoder, objectDecoder),
 		// use 500 to indicate that the cause of the error is unknown - other error codes
 		// are more specific to HTTP interactions, and set a reason

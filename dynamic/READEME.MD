@@ -1,4 +1,4 @@
-DynamicClient客户端是一种动态客户端，可以对任意的Kubernetes资源进行RESTful操作，包括CRD资源。
+`DynamicClient`客户端是一种动态客户端，可以对任意的`Kubernetes`资源进行`RESTful`操作，包括CRD资源。
 DynamicClient内部实现了Unstructured，用于处理非结构化数据结构（即无法提前预知的数据结构），
 这也是DynamicClient能够处理CRD资源的关键。
 
