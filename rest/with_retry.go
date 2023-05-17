@@ -50,6 +50,8 @@ var neverRetryError = IsRetryableErrorFunc(func(_ *http.Request, _ error) bool {
 // WithRetry allows the client to retry a request up to a certain number of times
 // Note that WithRetry is not safe for concurrent use by multiple
 // goroutines without additional locking or coordination.
+// 设置client重试请求的时间
+// WithRetry不是并发安全的，在多个goroutine中使用需要加锁或coordination
 type WithRetry interface {
 	// IsNextRetry advances the retry counter appropriately
 	// and returns true if the request should be retried,
@@ -68,6 +70,7 @@ type WithRetry interface {
 	// err: the server sent this error to us, if err is set then resp is nil.
 	// f: a IsRetryableErrorFunc function provided by the client that determines
 	//    if the err sent by the server is retryable.
+	// 用于确定是否应重试请求。它基于一些条件（如已达到的最大重试次数，错误是否属于可重试类别，服务器是否发送了特定的状态代码等）来决定是否进行下一次重试。
 	IsNextRetry(ctx context.Context, restReq *Request, httpReq *http.Request, resp *http.Response, err error, f IsRetryableErrorFunc) bool
 
 	// Before should be invoked prior to each attempt, including
@@ -77,6 +80,7 @@ type WithRetry interface {
 	// Before may also be additionally responsible for preparing
 	// the request for the next retry, namely in terms of resetting
 	// the request body in case it has been read.
+	// 在每次重试前调用，包括第一次调用，如果返回错误，这个请求应当立即停止
 	Before(ctx context.Context, r *Request) error
 
 	// After should be invoked immediately after an attempt is made.
@@ -100,6 +104,7 @@ type WithRetry interface {
 }
 
 // RetryAfter holds information associated with the next retry.
+// 下一次重试的信息
 type RetryAfter struct {
 	// Wait is the duration the server has asked us to wait before
 	// the next retry is initiated.
@@ -114,6 +119,7 @@ type RetryAfter struct {
 	Reason string
 }
 
+// 重试
 type withRetry struct {
 	maxRetries int
 	attempts   int

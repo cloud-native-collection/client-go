@@ -83,6 +83,7 @@ func (r *RequestConstructionError) Error() string {
 
 var noBackoff = &NoBackoff{}
 
+// 返回一个　WithRetry　对象
 type requestRetryFunc func(maxRetries int) WithRetry
 
 func defaultRequestRetryFn(maxRetries int) WithRetry {
@@ -443,6 +444,7 @@ func (r *Request) MaxRetries(maxRetries int) *Request {
 // If obj is a runtime.Object, marshal it correctly, and set Content-Type header.
 // If obj is a runtime.Object and nil, do nothing.
 // Otherwise, set an error.
+//　将传入的对象解析作为请求的body
 func (r *Request) Body(obj interface{}) *Request {
 	if r.err != nil {
 		return r
@@ -811,7 +813,7 @@ func (r *Request) newStreamWatcher(resp *http.Response) (watch.Interface, error)
 	// 使用流化序列化器创建一个新的监视事件解码器
 	watchEventDecoder := streaming.NewDecoder(frameReader, streamingSerializer)
 
-	// 返回一个新的流式监视器，该监视器会报告 HTTP 状态码为 500 的错误。
+	// 返回一个新的流式监视器，该监视器会报告 HTTP 状态码为 500 的错误。实现在apimachinery中
 	return watch.NewStreamWatcher(
 		// 创建的新解码器和前面得到的对象解码器
 		restclientwatch.NewDecoder(watchEventDecoder, objectDecoder),
@@ -857,6 +859,10 @@ func sanitize(req *Request, resp *http.Response, err error) (string, string) {
 // Returns io.ReadCloser which could be used for streaming of the response, or an error
 // Any non-2xx http status code causes an error.  If we get a non-2xx code, we try to convert the body into an APIStatus object.
 // If we can, we return that as an error.  Otherwise, we create an error that lists the http status and the content of the response.
+// Stream格式化和执行请求,并提供响应的流。
+// 返回一个 io.ReadCloser 用于streaming的响应，对于任何非２Xx的状态码将会返回错误
+// 如果我们得到了一个非２xx的code,如果我们可以，将body转为一个APIStatus对象，将会返回这样一个错误
+// 否则，我们将创建一个错误包含这个response中的http状态和内容
 func (r *Request) Stream(ctx context.Context) (io.ReadCloser, error) {
 	if r.err != nil {
 		return nil, r.err
@@ -1102,7 +1108,7 @@ func (r *Request) DoRaw(ctx context.Context) ([]byte, error) {
 }
 
 // transformResponse converts an API response into a structured API object
-// 解析result
+// 解析result,将api的response解析到一个api结构中
 func (r *Request) transformResponse(resp *http.Response, req *http.Request) Result {
 	var body []byte
 	if resp.Body != nil {

@@ -241,7 +241,7 @@ type ResourceEventHandlerRegistration interface {
 // SharedIndexInformer provides add and get Indexers ability based on SharedInformer.
 //  扩展了SharedInformer类型，共享的是Indexer,Indexer也是一种Store的实现
 type SharedIndexInformer interface {
-	// 继承sharedinformer
+	// SharedInformer 继承sharedinformer
 	SharedInformer
 	// AddIndexers add indexers to the informer before it starts.
 	// 扩展indexer相关的接口

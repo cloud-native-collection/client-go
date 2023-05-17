@@ -207,6 +207,7 @@ func (d *DiscoveryClient) GroupsAndMaybeResources() (
 		return nil, nil, nil, aerr
 	}
 	// Merge apis groups into the legacy groups.
+	// 将api接口检索到的资源组信息合并到apiGroupList列表中
 	for _, group := range apiGroups.Groups {
 		groups.Groups = append(groups.Groups, group)
 	}
@@ -300,6 +301,7 @@ func (d *DiscoveryClient) downloadAPIs() (
 		accept = AcceptV1
 	}
 	var responseContentType string
+	// 在/api中获取groupVersions并将结构放于metav1.APIVersions
 	body, err := d.restClient.Get().
 		AbsPath("/apis").
 		SetHeader("Accept", accept).
@@ -310,6 +312,7 @@ func (d *DiscoveryClient) downloadAPIs() (
 		return nil, nil, nil, err
 	}
 
+	// 在/apis中获取groupVersions并将结构放于metav1.APIGroupList
 	apiGroupList := &metav1.APIGroupList{}
 	failedGVs := map[schema.GroupVersion]error{}
 	var resourcesByGV map[schema.GroupVersion]*metav1.APIResourceList

@@ -397,6 +397,7 @@ func (c *dynamicResourceClient) Apply(ctx context.Context, name string, obj *uns
 	}
 	return uncastObj.(*unstructured.Unstructured), nil
 }
+
 func (c *dynamicResourceClient) ApplyStatus(ctx context.Context, name string, obj *unstructured.Unstructured, opts metav1.ApplyOptions) (*unstructured.Unstructured, error) {
 	return c.Apply(ctx, name, obj, opts, "status")
 }

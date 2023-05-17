@@ -29,12 +29,16 @@ import (
 // have contents which consist of a series of watchEvent objects encoded
 // with the given streaming decoder. The internal objects will be then
 // decoded by the embedded decoder.
+// Decoder 为 io.ReadClosers 实现 watch.Decoder 接口，
+// 其内容由一系列使用给定流解码器编码的 watchEvent 对象组成。
+// 然后内部对象将由嵌入的解码器解码。
 type Decoder struct {
 	decoder         streaming.Decoder
 	embeddedDecoder runtime.Decoder
 }
 
 // NewDecoder creates an Decoder for the given writer and codec.
+//　创建一个Ｄecoder用于writer和codec
 func NewDecoder(decoder streaming.Decoder, embeddedDecoder runtime.Decoder) *Decoder {
 	return &Decoder{
 		decoder:         decoder,
@@ -44,6 +48,8 @@ func NewDecoder(decoder streaming.Decoder, embeddedDecoder runtime.Decoder) *Dec
 
 // Decode blocks until it can return the next object in the reader. Returns an error
 // if the reader is closed or an object can't be decoded.
+// Decoder　将会阻塞直到能从reader中返回下一个对象
+// 如果reader被关闭或一个对象不能被解码将会返回一个错误
 func (d *Decoder) Decode() (watch.EventType, runtime.Object, error) {
 	var got metav1.WatchEvent
 	res, _, err := d.decoder.Decode(nil, &got)
@@ -53,6 +59,7 @@ func (d *Decoder) Decode() (watch.EventType, runtime.Object, error) {
 	if res != &got {
 		return "", nil, fmt.Errorf("unable to decode to metav1.Event")
 	}
+	// 判断是否是合法操作类型
 	switch got.Type {
 	case string(watch.Added), string(watch.Modified), string(watch.Deleted), string(watch.Error), string(watch.Bookmark):
 	default:
@@ -63,6 +70,7 @@ func (d *Decoder) Decode() (watch.EventType, runtime.Object, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("unable to decode watch event: %v", err)
 	}
+	// 返回类型　对象　错误
 	return watch.EventType(got.Type), obj, nil
 }
 

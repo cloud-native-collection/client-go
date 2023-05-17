@@ -113,7 +113,7 @@ type controller struct {
 // Controller is a low-level controller that is parameterized by a
 // Config and used in sharedIndexInformer.
 // Controller的接口，
-//把Reflector、DeltaFIFO组合起来形成一个相对固定的、标准的处理流程
+// 把Reflector、DeltaFIFO组合起来形成一个相对固定的、标准的处理流程
 type Controller interface {
 	// Run does two things.  One is to construct and run a Reflector
 	// to pump objects/notifications from the Config's ListerWatcher
@@ -255,13 +255,14 @@ func (c *controller) processLoop() {
 //     it will get an object of type DeletedFinalStateUnknown. This can
 //     happen if the watch is closed and misses the delete event and we don't
 //     notice the deletion until the subsequent re-list.
+//
 // 回调函数函数的接口
 type ResourceEventHandler interface {
-	// 添加对象回调函数
+	// OnAdd 添加对象回调函数
 	OnAdd(obj interface{}, isInInitialList bool)
-	// 更新对象回调函数
+	// OnUpdate 更新对象回调函数
 	OnUpdate(oldObj, newObj interface{})
-	// 删除对象回调函数
+	// OnDelete 删除对象回调函数
 	OnDelete(obj interface{})
 }
 

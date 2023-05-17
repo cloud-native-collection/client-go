@@ -54,7 +54,7 @@ type Interface interface {
 //
 // TODO: ContentConfig will be updated to accept a Negotiator instead of a
 // NegotiatedSerializer and NegotiatedSerializer will be removed.
-// rest 对于响应的编码和解码
+//　用于控制RESTClient如何与server交互
 type ClientContentConfig struct {
 	// AcceptContentTypes specifies the types the client will accept and is optional.
 	// If not set, ContentType will be used to define the Accept header
@@ -84,28 +84,35 @@ type RESTClient struct {
 	// base is the root URL for all invocations of the client
 	base *url.URL
 	// versionedAPIPath is a path segment connecting the base URL to the resource root
+	// 设置请求资源的版本
 	versionedAPIPath string
 
 	// content describes how a RESTClient encodes and decodes responses.
+	// client的内容解析配置，如何编码和解析响应
 	content ClientContentConfig
 
 	// creates BackoffManager that is passed to requests.
+	// 管理下次请求的退避时间
 	createBackoffMgr func() BackoffManager
 
 	// rateLimiter is shared among all requests created by this client unless specifically
 	// overridden.
+	// RestClient创建的请求共享的限速器，除非特别指定覆盖－－－>从这里可以看出所有请求共享一个client
 	rateLimiter flowcontrol.RateLimiter
 
 	// warningHandler is shared among all requests created by this client.
 	// If not set, defaultWarningHandler is used.
+	// 当前client创建所有请求共享,如果为设置，将会使用defaultWarningHandler
 	warningHandler WarningHandler
 
 	// Set specific behavior of the client.  If not set http.DefaultClient will be used.
+	// 指向一个有配置的client，如果没有配置将会使用http.DefaultClient
 	Client *http.Client
 }
 
 // NewRESTClient creates a new RESTClient. This client performs generic REST functions
 // such as Get, Put, Post, and Delete on specified paths.
+// 创建一个　RESTClient,这个是个通用的REST client在指定的路径上增查删改
 func NewRESTClient(baseURL *url.URL, versionedAPIPath string, config ClientContentConfig, rateLimiter flowcontrol.RateLimiter, client *http.Client) (*RESTClient, error) {
 	if len(config.ContentType) == 0 {
 		config.ContentType = "application/json"
@@ -139,6 +146,7 @@ func (c *RESTClient) GetRateLimiter() flowcontrol.RateLimiter {
 
 // readExpBackoffConfig handles the internal logic of determining what the
 // backoff policy is.  By default if no information is available, NoBackoff.
+// readExpBackoffConfig处理决定的内在逻辑退避政策是什么。默认NoBackoff没有可以获得的信息
 // TODO Generalize this see #17727 .
 func readExpBackoffConfig() BackoffManager {
 	backoffBase := os.Getenv(envBackoffBase)
@@ -169,6 +177,7 @@ func readExpBackoffConfig() BackoffManager {
 //
 // if err != nil { ... }
 // list, ok := resp.(*api.PodList)
+// 创建一个request
 func (c *RESTClient) Verb(verb string) *Request {
 	return NewRequest(c).Verb(verb)
 }

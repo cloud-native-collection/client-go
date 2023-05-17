@@ -28,8 +28,10 @@ import (
 )
 
 // WarningHandler is an interface for handling warning headers
+// 处理从服务器接收到的警告头信息
 type WarningHandler interface {
 	// HandleWarningHeader is called with the warn code, agent, and text when a warning header is countered.
+	// 在遇到警告头时被调用，它接收三个参数：警告代码（code），代理（agent）和警告文本（text）。这三个参数通常来自 HTTP 响应的 "Warning" 头字段。
 	HandleWarningHeader(code int, agent string, text string)
 }
 
