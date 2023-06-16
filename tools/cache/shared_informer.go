@@ -239,7 +239,8 @@ type ResourceEventHandlerRegistration interface {
 }
 
 // SharedIndexInformer provides add and get Indexers ability based on SharedInformer.
-//  扩展了SharedInformer类型，共享的是Indexer,Indexer也是一种Store的实现
+//
+//	扩展了SharedInformer类型，共享的是Indexer,Indexer也是一种Store的实现
 type SharedIndexInformer interface {
 	// SharedInformer 继承sharedinformer
 	SharedInformer
@@ -508,34 +509,34 @@ func (s *sharedIndexInformer) Run(stopCh <-chan struct{}) {
 		klog.Warningf("The sharedIndexInformer has started, run more than once is not allowed")
 		return
 	}
-	// 在此处构造的DeltaFIFO
-	fifo := NewDeltaFIFOWithOptions(DeltaFIFOOptions{
-		KnownObjects:          s.indexer,
-		EmitDeltaTypeReplaced: true,
-		Transformer:           s.transform,
-	})
 
-	//Reflecto中的config
-	cfg := &Config{
-		// Reflector输入到DeltaFIFO
-		Queue: fifo,
-		// Reflector
-		ListerWatcher:     s.listerWatcher,
-		ObjectType:        s.objectType,
-		ObjectDescription: s.objectDescription,
-		FullResyncPeriod:  s.resyncCheckPeriod,
-		RetryOnError:      false,
-		ShouldResync:      s.processor.shouldResync,
-
-		//Controller调用DeltaFIFO.Pop()接口传入的HandleDeltas这个回调函数
-		Process:           s.HandleDeltas,
-		WatchErrorHandler: s.watchErrorHandler,
-	}
-
-	// 创建controller
 	func() {
 		s.startedLock.Lock()
 		defer s.startedLock.Unlock()
+
+		// 在此处构造的DeltaFIFO
+		fifo := NewDeltaFIFOWithOptions(DeltaFIFOOptions{
+			KnownObjects:          s.indexer,
+			EmitDeltaTypeReplaced: true,
+			Transformer:           s.transform,
+		})
+
+		//Reflecto中的config
+		cfg := &Config{
+			// Reflector输入到DeltaFIFO
+			Queue: fifo,
+			// Reflector
+			ListerWatcher:     s.listerWatcher,
+			ObjectType:        s.objectType,
+			ObjectDescription: s.objectDescription,
+			FullResyncPeriod:  s.resyncCheckPeriod,
+			RetryOnError:      false,
+			ShouldResync:      s.processor.shouldResync,
+
+			//Controller调用DeltaFIFO.Pop()接口传入的HandleDeltas这个回调函数
+			Process:           s.HandleDeltas,
+			WatchErrorHandler: s.watchErrorHandler,
+		}
 
 		s.controller = New(cfg)
 		s.controller.(*controller).clock = s.clock
@@ -1031,7 +1032,7 @@ func newProcessListener(handler ResourceEventHandler, requestedResyncPeriod, res
 	return ret
 }
 
-//通过addCh传入notification事件
+// 通过addCh传入notification事件
 func (p *processorListener) add(notification interface{}) {
 	if a, ok := notification.(addNotification); ok && a.isInInitialList {
 		p.syncTracker.Start()
@@ -1082,7 +1083,7 @@ func (p *processorListener) pop() {
 	}
 }
 
-//通过sharedProcessor利用wait.Group启动
+// 通过sharedProcessor利用wait.Group启动
 func (p *processorListener) run() {
 	// this call blocks until the channel is closed.  When a panic happens during the notification
 	// we will catch it, **the offending item will be skipped!**, and after a short delay (one second)
