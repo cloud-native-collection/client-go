@@ -18,22 +18,31 @@ limitations under the License.
 
 package v1beta1
 
-// AllowedCSIDriverApplyConfiguration represents an declarative configuration of the AllowedCSIDriver type for use
+// VariableApplyConfiguration represents an declarative configuration of the Variable type for use
 // with apply.
-type AllowedCSIDriverApplyConfiguration struct {
-	Name *string `json:"name,omitempty"`
+type VariableApplyConfiguration struct {
+	Name       *string `json:"name,omitempty"`
+	Expression *string `json:"expression,omitempty"`
 }
 
-// AllowedCSIDriverApplyConfiguration constructs an declarative configuration of the AllowedCSIDriver type for use with
+// VariableApplyConfiguration constructs an declarative configuration of the Variable type for use with
 // apply.
-func AllowedCSIDriver() *AllowedCSIDriverApplyConfiguration {
-	return &AllowedCSIDriverApplyConfiguration{}
+func Variable() *VariableApplyConfiguration {
+	return &VariableApplyConfiguration{}
 }
 
 // WithName sets the Name field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Name field is set to the value of the last call.
-func (b *AllowedCSIDriverApplyConfiguration) WithName(value string) *AllowedCSIDriverApplyConfiguration {
+func (b *VariableApplyConfiguration) WithName(value string) *VariableApplyConfiguration {
 	b.Name = &value
+	return b
+}
+
+// WithExpression sets the Expression field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Expression field is set to the value of the last call.
+func (b *VariableApplyConfiguration) WithExpression(value string) *VariableApplyConfiguration {
+	b.Expression = &value
 	return b
 }

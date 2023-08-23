@@ -350,7 +350,7 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 			if !apierrors.IsInvalid(err) {
 				return err
 			}
-			klog.Warning("the watch-list feature is not supported by the server, falling back to the previous LIST/WATCH semantic")
+			klog.Warning("The watch-list feature is not supported by the server, falling back to the previous LIST/WATCH semantics")
 			fallbackToList = true
 			// Ensure that we won't accidentally pass some garbage down the watch.
 			w = nil
@@ -366,6 +366,7 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 		}
 	}
 
+	klog.V(2).Infof("Caches populated for %v from %s", r.typeDescription, r.name)
 	// 启动一个后台协程实现定期的同步操作，这个同步就是将SharedInformer里面的对象全量以同步事件的方式通知使用者
 	// 我们暂且称之为“后台同步协程”，Run()函数退出需要后台同步协程退出，所以下面的cancelCh就是干这个用的
 	// 利用defer close(cancelCh)实现的，而resyncerrc是后台同步协程反向通知Run()函数的报错通道
@@ -679,6 +680,7 @@ func (r *Reflector) watchList(stopCh <-chan struct{}) (watch.Interface, error) {
 		options := metav1.ListOptions{
 			ResourceVersion:      lastKnownRV,
 			AllowWatchBookmarks:  true,
+			SendInitialEvents:    pointer.Bool(true),
 			ResourceVersionMatch: metav1.ResourceVersionMatchNotOlderThan,
 			TimeoutSeconds:       &timeoutSeconds,
 		}
