@@ -108,7 +108,7 @@ type DeltaFIFOOptions struct {
 // A note on threading: If you call Pop() in parallel from multiple
 // threads, you could end up with multiple threads processing slightly
 // different versions of the same object.
-// DeltaFIFO一个按序的(先入先出)kubernetes对象变化的队列
+// ⭐️ DeltaFIFO一个按序的(先入先出)kubernetes对象变化的队列，处理事件流，管理对象变更历史，保证事件顺序
 type DeltaFIFO struct {
 	// lock/cond protects access to 'items' and 'queue'.
 	// 读写锁，涉及到同时读写，读写锁性能要高
@@ -709,7 +709,7 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 // in `f.items`, it is the object in `f.knownObjects`
 // DeltaFIFO对外输出的就是所有目标的增量变化
 // 所以每次全量更新都要判断对象是否已经删除，因为在全量更新前可能没有收到目标删除的请求。
-//这一点与cache不同，cache的Replace()相当于重建，因为cache就是对象全量的一种内存映射，所以Replace()就等于重建
+// 这一点与cache不同，cache的Replace()相当于重建，因为cache就是对象全量的一种内存映射，所以Replace()就等于重建
 func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()

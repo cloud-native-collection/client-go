@@ -309,16 +309,22 @@ func NewSharedIndexInformerWithOptions(lw ListerWatcher, exampleObject runtime.O
 }
 
 // SharedIndexInformerOptions configures a sharedIndexInformer.
+// SharedIndexInformerOptions配置sharedIndexInformer
 type SharedIndexInformerOptions struct {
 	// ResyncPeriod is the default event handler resync period and resync check
 	// period. If unset/unspecified, these are defaulted to 0 (do not resync).
+	// ResyncPeriod 是默认的事件处理程序重新同步周期和重新同步检查周期。
+    // 会定期触发一次全量同步，如果未设置/未指定，则默认为 0（不进行重新同步）
 	ResyncPeriod time.Duration
 
 	// Indexers is the sharedIndexInformer's indexers. If unset/unspecified, no indexers are configured.
+	// 如果未设置/未指定，则不配置索引器
+	// 索引器
 	Indexers Indexers
 
 	// ObjectDescription is the sharedIndexInformer's object description. This is passed through to the
 	// underlying Reflector's type description.
+	// 这会传递给底层的 Reflector 的类型描述
 	ObjectDescription string
 }
 

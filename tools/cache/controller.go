@@ -155,6 +155,7 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 		<-stopCh
 		c.config.Queue.Close()
 	}()
+
 	// 创建reflector
 	r := NewReflectorWithOptions(
 		c.config.ListerWatcher,
@@ -180,11 +181,10 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 	// 所有被group管理的协程退出调用Wait()才会退出,否则阻塞
 	var wg wait.Group
 
-	// StartWithChannel()会启动协程执行Reflector.Run()，同时接收到stopCh信号就会退出协程
+	// ⭐️ StartWithChannel()会启动协程执行 Reflector.Run(),Run 方法会重复调用 reflector 的 ListAndWatch 来获取所有对象及其后续的增量变更,同时接收到stopCh信号就会退出协程
 	wg.StartWithChannel(stopCh, r.Run)
 
-	// wait.Until()周期性的调用c.processLoop()，这里是1秒
-	// 不用担心调用频率太高，正常情况下c.processLoop是不会返回的，
+	// ⭐️ wait.Until()周期性的调用c.processLoop()，这里是1秒，不用担心调用频率太高，正常情况下c.processLoop是不会返回的，
 	// 除非遇到了解决不了的错误，因为他是个循环
 	wait.Until(c.processLoop, time.Second, stopCh)
 	wg.Wait()
@@ -215,11 +215,17 @@ func (c *controller) LastSyncResourceVersion() string {
 // actually exit when the controller is stopped. Or just give up on this stuff
 // ever being stoppable. Converting this whole package to use Context would
 // also be helpful.
+// processLoop 处理工作队列中的项目
+// TODO: 考虑并行处理，这需要仔细设计以避免并发处理同一对象
+// TODO: 将 stopCh 传递到队列中，以便在控制器停止时能正确退出
+// 或者放弃使这部分可停止。将整个包改为使用 Context 也会很有帮助
+// ⭐️ processLoop()是Controller的核心，它会从队列中弹出一个对象，然后处理它
 func (c *controller) processLoop() {
+	// 持续从队列中获取并处理项目，每个循环处理一个项目
 	for {
-		// 从队列中弹出一个对象，然后处理它,这才是最主要的部分，
-		// 这个c.config.Process是构造Controller的时候通过Config传进来的
-		// 所以这个读者要特别注意了，这个函数其实是ShareInformer传入，是SharedInformer的重点
+		// c.config.Process 是在创建 Controller 时通过 Config 传入的处理函数
+		// 这个处理函数会被包装成 PopProcessFunc 类型，然后传给队列的 Pop 方法执行
+		// 在 shared_informer.go 中，processDeltas 函数被设置为 c.config.Process
 		obj, err := c.config.Queue.Pop(PopProcessFunc(c.config.Process))
 		if err != nil {
 			// FIFO关闭
@@ -252,7 +258,20 @@ func (c *controller) processLoop() {
 //     happen if the watch is closed and misses the delete event and we don't
 //     notice the deletion until the subsequent re-list.
 //
-// 回调函数函数的接口
+// ResourceEventHandler 用于处理资源事件通知的接口。这些事件是只读的，因此不能返回错误。
+// 所有处理器都不得修改接收到的对象，这包括顶层结构及其所有可访问的子结构。
+//
+// 方法说明：
+//   - OnAdd: 当对象被添加时调用
+//   - OnUpdate: 当对象被修改时调用。注意 oldObj 是对象的最后已知状态。
+//     多个变更可能被合并，因此不能依赖此回调查看每个单独的变更。
+//     在重新列出时也会调用 OnUpdate，即使没有任何变化也会触发。
+//     这适用于定期评估或同步某些内容。
+//   - OnDelete: 当对象被删除时调用。如果知道对象的最终状态，则传入最终状态；
+//     否则会收到 DeletedFinalStateUnknown 类型的对象。
+//     这种情况通常发生在 watch 关闭并错过删除事件，直到后续重新列出时才注意到删除。
+//
+// ⭐️ 回调函数函数的接口，controller通过这个接口来通知事件,开发人员需要实现这个接口
 type ResourceEventHandler interface {
 	// OnAdd 添加对象回调函数
 	OnAdd(obj interface{}, isInInitialList bool)
@@ -269,6 +288,11 @@ type ResourceEventHandler interface {
 //
 // See ResourceEventHandlerDetailedFuncs if your use needs to propagate
 // HasSynced.
+// ResourceEventHandlerFuncs 是一个适配器，让你可以方便地指定任意数量的事件处理函数，
+// 同时仍然实现 ResourceEventHandler 接口。
+// 注意：此适配器不会解除对修改对象的限制（事件对象仍然是只读的）。
+//
+// 如果需要传播 HasSynced 状态，请使用 ResourceEventHandlerDetailedFuncs。
 type ResourceEventHandlerFuncs struct {
 	AddFunc    func(obj interface{})
 	UpdateFunc func(oldObj, newObj interface{})
@@ -392,6 +416,16 @@ func DeletionHandlingMetaNamespaceKeyFunc(obj interface{}) (string, error) {
 //     long as possible (until the upstream source closes the watch or times out,
 //     or you stop the controller).
 //   - h is the object you want notifications sent to.
+//
+// NewInformer 返回一个 Store 和 Controller，用于填充存储并提供事件通知。
+// 返回的 Store 应仅用于 Get/List 操作；Add/Modify/Delete 操作将导致事件通知出错。
+//
+// 参数：
+//   - lw: 用于监听资源的 List 和 Watch 函数
+//   - objType: 期望接收的对象类型
+//   - resyncPeriod: 非零值表示重新全量同步的周期（即使没有变化也会触发 OnUpdate 回调）
+//     如果为零，则尽可能延迟重新同步（直到上游关闭 watch 或超时，或控制器停止）
+//   - h: 接收通知的对象
 func NewInformer(
 	lw ListerWatcher,
 	objType runtime.Object,
@@ -399,6 +433,7 @@ func NewInformer(
 	h ResourceEventHandler,
 ) (Store, Controller) {
 	// This will hold the client state, as we know it.
+	// 状态存储，基本的存储功能
 	clientState := NewStore(DeletionHandlingMetaNamespaceKeyFunc)
 
 	return clientState, newInformer(lw, objType, resyncPeriod, h, clientState, nil)
@@ -419,6 +454,17 @@ func NewInformer(
 //     or you stop the controller).
 //   - h is the object you want notifications sent to.
 //   - indexers is the indexer for the received object type.
+//
+// NewIndexerInformer 返回一个 Indexer 和 Controller，用于填充索引并提供事件通知。
+// 返回的 Indexer 应仅用于 Get/List 操作；Add/Modify/Delete 操作将导致事件通知出错。
+//
+// 参数：
+//   - lw: 用于监听资源的 List 和 Watch 函数
+//   - objType: 期望接收的对象类型
+//   - resyncPeriod: 非零值表示重新全量同步的周期（即使没有变化也会触发 OnUpdate 回调）
+//     如果为零，则尽可能延迟重新同步（直到上游关闭 watch 或超时，或控制器停止）
+//   - h: 接收通知的对象
+//   - indexers: 支持基于索引的高效查询，适用于需要按字段或标签快速查找的场景
 func NewIndexerInformer(
 	lw ListerWatcher,
 	objType runtime.Object,
@@ -427,6 +473,7 @@ func NewIndexerInformer(
 	indexers Indexers,
 ) (Indexer, Controller) {
 	// This will hold the client state, as we know it.
+	// 状态存储，支持基于索引的高效查询，适用于需要按字段或标签快速查找的场景
 	clientState := NewIndexer(DeletionHandlingMetaNamespaceKeyFunc, indexers)
 
 	return clientState, newInformer(lw, objType, resyncPeriod, h, clientState, nil)
@@ -439,6 +486,13 @@ func NewIndexerInformer(
 // The given transform function will be called on all objects before they will
 // put into the Store and corresponding Add/Modify/Delete handlers will
 // be invoked for them.
+// NewTransformingInformer 返回一个 Store 和 Controller，用于填充存储并提供事件通知。
+// 返回的 Store 应仅用于 Get/List 操作；Add/Modify/Delete 操作将导致事件通知出错。
+//
+// 特性：
+// - 在对象存入 Store 之前，会先通过 transform 函数进行处理
+// - 处理后的对象会触发相应的事件处理器（OnAdd/OnUpdate/OnDelete）
+// - 适用于需要在缓存前修改或转换对象的场景
 func NewTransformingInformer(
 	lw ListerWatcher,
 	objType runtime.Object,
@@ -459,6 +513,13 @@ func NewTransformingInformer(
 // The given transform function will be called on all objects before they will
 // be put into the Index and corresponding Add/Modify/Delete handlers will
 // be invoked for them.
+// NewTransformingIndexerInformer 返回一个 Indexer 和 Controller，用于填充索引并提供事件通知。
+// 返回的 Indexer 应仅用于 Get/List 操作；Add/Modify/Delete 操作将导致事件通知出错。
+//
+// 特性：
+// - 在对象存入 Indexer 之前，会先通过 transform 函数进行处理
+// - 处理后的对象会触发相应的事件处理器（OnAdd/OnUpdate/OnDelete）
+// - 适用于需要在缓存前修改或转换对象的场景
 func NewTransformingIndexerInformer(
 	lw ListerWatcher,
 	objType runtime.Object,
@@ -475,16 +536,22 @@ func NewTransformingIndexerInformer(
 
 // Multiplexes updates in the form of a list of Deltas into a Store, and informs
 // a given handler of events OnUpdate, OnAdd, OnDelete
+// 将增量更新列表(Deltas)多路复用到存储(Store)中，
+// 并通过事件处理器(handler)通知更新(OnUpdate)、添加(OnAdd)、删除(OnDelete)事件
+// ⭐️ 连接增量队列(DeltaFIFO)和事件处理器，将增量变更转换为具体的存储操作和事件通知
 func processDeltas(
 	// Object which receives event notifications from the given deltas
+	// handler是事件处理器，用于处理事件通知
 	handler ResourceEventHandler,
+	// clientState是存储，用于存储对象
 	clientState Store,
+	// deltas是增量更新列表
 	deltas Deltas,
+	// isInInitialList表示是否是第一批对象
 	isInInitialList bool,
 ) error {
 	// from oldest to newest
-	// Deltas里面包含了一个对象的多个增量操作，
-	// 要从最老的Delta到最先的Delta遍历处理
+	// Deltas里面包含了一个对象的多个增量操作,要从最老的Delta到最先的Delta遍历处理
 	for _, d := range deltas {
 		obj := d.Object
 
@@ -494,10 +561,13 @@ func processDeltas(
 		switch d.Type {
 		//  同步、添加、更新都是对象添加类，至于是否是更新还要看cache是否有这个对象
 		case Sync, Replaced, Added, Updated:
+
 			if old, exists, err := clientState.Get(obj); err == nil && exists {
+				// 如果cache中存在这个对象，那么就是更新操作
 				if err := clientState.Update(obj); err != nil {
 					return err
 				}
+				// 通知处理器更新
 				handler.OnUpdate(old, obj)
 			} else {
 				// 将对象添加到cache
@@ -530,6 +600,17 @@ func processDeltas(
 //     or you stop the controller).
 //   - h is the object you want notifications sent to.
 //   - clientState is the store you want to populate
+//
+// newInformer 返回一个控制器，用于填充存储并同时提供事件通知。
+//
+// 参数：
+//   - lw: 用于监听资源的 List 和 Watch 函数
+//   - objType: 期望接收的对象类型
+//   - resyncPeriod: 非零值表示重新全量同步的周期（即使没有变化也会触发 OnUpdate 回调）
+//     如果为零，则尽可能延迟重新同步（直到上游关闭 watch 或超时，或控制器停止）
+//   - h: 接收通知的对象
+//   - clientState: 要填充的存储
+//   - transformer: 用于转换对象的函数
 func newInformer(
 	lw ListerWatcher,
 	objType runtime.Object,
@@ -541,6 +622,8 @@ func newInformer(
 	// This will hold incoming changes. Note how we pass clientState in as a
 	// KeyLister, that way resync operations will result in the correct set
 	// of update/delete deltas.
+	// 创建 DeltaFIFO 队列，用于处理增量变更
+	// 传入 clientState 作为 KeyLister，确保重新同步操作能生成正确的更新/删除增量
 	fifo := NewDeltaFIFOWithOptions(DeltaFIFOOptions{
 		KnownObjects:          clientState,
 		EmitDeltaTypeReplaced: true,
@@ -548,15 +631,17 @@ func newInformer(
 	})
 
 	cfg := &Config{
-		Queue:            fifo,
-		ListerWatcher:    lw,
-		ObjectType:       objType,
-		FullResyncPeriod: resyncPeriod,
+		Queue:            fifo,         //  DeltaFIFO 队列
+		ListerWatcher:    lw,           // List和Watch函数
+		ObjectType:       objType,      // 期望接收的对象类型
+		FullResyncPeriod: resyncPeriod, // 重新全量同步的周期
 		RetryOnError:     false,
 
 		// deltaFIFO的回调函数
 		Process: func(obj interface{}, isInInitialList bool) error {
+			// 确保处理的是 Deltas 类型
 			if deltas, ok := obj.(Deltas); ok {
+				// 处理增量变更Deltas
 				return processDeltas(h, clientState, deltas, isInInitialList)
 			}
 			return errors.New("object given as Process argument is not Deltas")

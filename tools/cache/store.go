@@ -37,6 +37,15 @@ import (
 //
 // Reflector knows how to watch a server and update a Store.  This
 // package provides a variety of implementations of Store.
+// Store 是一个通用的对象存储和处理接口。一个 Store 维护了一个从字符串键到累加器的映射，
+// 并提供了添加、更新和删除给定对象的操作。Store 还知道如何从给定对象中提取键，
+// 因此许多操作只需要传入对象即可。
+//
+// 在最简单的 Store 实现中，每个累加器就是最后给定的对象，或者在 Delete 操作后变为空，
+// 因此 Store 的行为就是简单的存储。
+//
+// Reflector 知道如何监听服务器并更新 Store。本包提供了多种 Store 的实现。
+// ⭐️ 状态存储
 type Store interface {
 
 	// Add adds the given object to the accumulator associated with the given object's key

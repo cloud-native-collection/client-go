@@ -99,6 +99,7 @@ func (rw *RetryWatcher) send(event watch.Event) bool {
 // doReceive returns true when it is done, false otherwise.
 // If it is not done the second return value holds the time to wait before calling it again.
 func (rw *RetryWatcher) doReceive() (bool, time.Duration) {
+	// 通过watchClient创建watcher
 	watcher, err := rw.watcherClient.Watch(metav1.ListOptions{
 		ResourceVersion:     rw.lastResourceVersion,
 		AllowWatchBookmarks: true,
@@ -137,9 +138,11 @@ func (rw *RetryWatcher) doReceive() (bool, time.Duration) {
 		return false, 0
 	}
 
+	// 获取watcher的事件chan
 	ch := watcher.ResultChan()
 	defer watcher.Stop()
 
+	// 循环读取事件
 	for {
 		select {
 		case <-rw.stopChan:

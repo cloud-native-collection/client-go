@@ -286,34 +286,53 @@ func (f *FIFO) IsClosed() bool {
 // so if you don't successfully process it, it should be added back with
 // AddIfNotPresent(). process function is called under lock, so it is safe
 // update data structures in it that need to be in sync with the queue.
+// Pop 方法会阻塞直到有项目就绪并处理它。如果有多个项目就绪，
+// 它们会按照添加/更新的顺序被返回。
+// 注意：项目在处理前会先从队列（和存储）中移除，
+// 所以如果没有成功处理，应该使用 AddIfNotPresent() 重新添加。
+// process 函数在锁内被调用，因此可以安全地更新需要与队列同步的数据结构。
 func (f *FIFO) Pop(process PopProcessFunc) (interface{}, error) {
+	// 确保每个 Pop() 调用只处理一个项目
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	for {
+		// 等待队列非空
 		for len(f.queue) == 0 {
 			// When the queue is empty, invocation of Pop() is blocked until new item is enqueued.
 			// When Close() is called, the f.closed is set and the condition is broadcasted.
 			// Which causes this loop to continue and return from the Pop().
+			// 当队列为空时，Pop() 调用会被阻塞，直到有新项目入队。
+			// 当调用 Close() 时，会设置 f.closed 并广播条件变量。
+			// 这会使循环继续执行并从 Pop() 返回。
+			// 如果队列已关闭，返回错误
 			if f.closed {
 				return nil, ErrFIFOClosed
 			}
-
+			// 等待条件变量通知
 			f.cond.Wait()
 		}
+		// 检查是否在初始同步阶段
 		isInInitialList := !f.hasSynced_locked()
+		// 从队列头部取出项目
 		id := f.queue[0]
 		f.queue = f.queue[1:]
+		// 更新初始同步计数
 		if f.initialPopulationCount > 0 {
 			f.initialPopulationCount--
 		}
+		// 从存储中获取项目
 		item, ok := f.items[id]
 		if !ok {
 			// Item may have been deleted subsequently.
+			// 项目可能已被删除
 			continue
 		}
+		// 从存储中删除项目
 		delete(f.items, id)
+		// ⭐️ 处理项目
 		err := process(item, isInInitialList)
 		if e, ok := err.(ErrRequeue); ok {
+			// 如果需要重试，重新添加项目
 			f.addIfNotPresent(id, item)
 			err = e.Err
 		}
